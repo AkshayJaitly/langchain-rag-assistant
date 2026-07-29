@@ -1,0 +1,123 @@
+# RAG Vector-DB Assistant
+
+A retrieval-augmented-generation app built with **LangChain**, **LangGraph**,
+**ChromaDB**, and a **React** frontend. It ingests PDF / Word / text documents,
+creates embeddings, and answers questions grounded in the retrieved context —
+using the **parent-child (small-to-big) retrieval algorithm** and **input /
+output guardrails**.
+
+```
+┌──────────────┐   /api/upload   ┌────────────────────────────────────────┐
+│ React (Vite) │ ──────────────► │ FastAPI                                │
+│  chat + docs │   /api/query    │  ├─ ingest: PDF/Word/txt → parent+child │
+└──────────────┘ ◄────────────── │  │            chunks → local embeddings │
+                                 │  │            → Chroma (children)         │
+                                 │  │            → file docstore (parents)   │
+                                 │  └─ LangGraph pipeline:                   │
+                                 │       input guardrail → retrieve →        │
+                                 │       generate (Claude) → output guardrail│
+                                 └────────────────────────────────────────┘
+```
+
+## Key pieces
+
+| Concern            | Implementation                                                        |
+| ------------------ | -------------------------------------------------------------------- |
+| Vector DB          | ChromaDB (persistent, cosine)                                        |
+| Embeddings         | `sentence-transformers/all-MiniLM-L6-v2` (local, offline, no cost)   |
+| Parent-child       | LangChain `ParentDocumentRetriever` — embed small chunks, return big |
+| Orchestration      | LangGraph `StateGraph` with conditional guardrail edges             |
+| Generation         | Claude (`claude-sonnet-5`) via `langchain-anthropic`                 |
+| Guardrails         | input (injection / size), grounding (no-context refusal), output (secret redaction + grounding check) |
+| Doc parsing        | `pypdf` (PDF), `docx2txt` (Word), `TextLoader` (txt/md)             |
+
+### The parent-child algorithm
+
+Documents are split into **large parent chunks** and **small child chunks**.
+Only the children are embedded (small chunks retrieve more precisely). At query
+time we search the children, then hand the LLM their **parent** chunks so it has
+the surrounding context. Parents live in a file-backed docstore; children live
+in Chroma.
+
+### The LangGraph pipeline
+
+```
+START → input_guardrail ─(blocked)────────────────► END
+              │
+           (ok) → retrieve ─(no docs)─► no_context → END
+                       │
+                    (docs) → generate → output_guardrail → END
+```
+
+## Prerequisites
+
+- Python 3.11+ and Node 18+
+- An Anthropic API key
+
+## Backend setup
+
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # then edit .env and set ANTHROPIC_API_KEY
+uvicorn app.main:app --reload --port 8000
+```
+
+First run downloads the embedding model (~90 MB) once. API docs at
+`http://localhost:8000/docs`.
+
+## Frontend setup
+
+```bash
+cd frontend
+npm install
+npm run dev                    # http://localhost:5173 (proxies /api → :8000)
+```
+
+## Using it
+
+1. Open `http://localhost:5173`.
+2. Upload a PDF / Word / text file (left panel) — it is parsed, chunked,
+   embedded, and indexed.
+3. Ask a question. The answer is grounded in retrieved chunks, shows its
+   sources, and displays which guardrails fired.
+
+## API
+
+| Method | Path             | Body                     | Purpose                        |
+| ------ | ---------------- | ------------------------ | ------------------------------ |
+| GET    | `/api/health`    | –                        | Service + model info           |
+| GET    | `/api/documents` | –                        | List ingested documents        |
+| POST   | `/api/upload`    | multipart `file`         | Ingest a document              |
+| POST   | `/api/query`     | `{"question": "..."}`    | Answer + sources + guardrails  |
+
+## Configuration
+
+All settings are environment variables (see `backend/.env.example`): model,
+chunk sizes, retrieval `k`, persistence directories, CORS origins.
+
+## Choosing the generation model
+
+Set `LLM_PROVIDER` in `backend/.env`:
+
+| `LLM_PROVIDER` | Cost      | Setup                                                            |
+| -------------- | --------- | --------------------------------------------------------------- |
+| `anthropic`    | paid API  | Set `ANTHROPIC_API_KEY`; pick `LLM_MODEL` (`claude-haiku-4-5` = cheapest, `claude-sonnet-5` = balanced, `claude-opus-5` = best). |
+| `ollama`       | **free**  | Install [Ollama](https://ollama.com), run `ollama pull llama3.1:8b`, set `OLLAMA_MODEL`. No API key needed. |
+
+Embeddings are always local (free); only generation differs. To go fully
+offline at $0:
+
+```bash
+# .env
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=llama3.1:8b
+```
+
+## Notes
+
+- Embeddings run locally, so re-indexing and retrieval cost nothing.
+- Guardrails here are intentionally lightweight/heuristic — for production,
+  consider a dedicated moderation model and a stricter faithfulness grader.
+```
