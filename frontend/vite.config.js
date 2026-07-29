@@ -1,8 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Proxy /api to the FastAPI backend so the frontend can use relative URLs.
+// base: "/" for local dev; set VITE_BASE=/<repo>/ when building for GitHub Pages.
+// Proxy /api to the FastAPI backend so the frontend can use relative URLs locally.
 export default defineConfig({
+  base: process.env.VITE_BASE || "/",
   plugins: [react()],
   server: {
     port: 5173,

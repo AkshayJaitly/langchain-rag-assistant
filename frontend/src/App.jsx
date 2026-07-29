@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
+// Backend base URL. Empty = same-origin (local dev uses the Vite proxy).
+// On GitHub Pages set VITE_API_BASE to your hosted backend URL at build time.
+// No API keys ever live here — they stay server-side on the backend.
+const API = import.meta.env.VITE_API_BASE || "";
+
 const EXAMPLES = [
   "Summarize the key points",
   "What are the main terms?",
@@ -117,7 +122,7 @@ export default function App() {
 
   const refreshDocs = async () => {
     try {
-      const res = await fetch("/api/documents");
+      const res = await fetch(`${API}/api/documents`);
       const data = await res.json();
       setDocs(data.documents || []);
     } catch {
@@ -127,7 +132,7 @@ export default function App() {
 
   const refreshHealth = async () => {
     try {
-      const res = await fetch("/api/health");
+      const res = await fetch(`${API}/api/health`);
       setHealth(res.ok ? await res.json() : null);
     } catch {
       setHealth(null);
@@ -154,7 +159,7 @@ export default function App() {
     const form = new FormData();
     form.append("file", file);
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const res = await fetch(`${API}/api/upload`, { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       setStatus({
@@ -176,7 +181,7 @@ export default function App() {
     setQuestion("");
     setLoading(true);
     try {
-      const res = await fetch("/api/query", {
+      const res = await fetch(`${API}/api/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),
