@@ -25,7 +25,7 @@ services:
       - key: LANGSMITH_API_KEY
         sync: false
       - key: LANGSMITH_PROJECT
-        value: rag-assistant-production
+        value: pr-puzzled-robot-90
       - key: LANGSMITH_ENVIRONMENT
         value: production
       # Safe default for uploaded documents. Set these to false only when the

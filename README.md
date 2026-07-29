@@ -6,30 +6,41 @@ creates embeddings, and answers questions grounded in the retrieved context —
 using the **parent-child (small-to-big) retrieval algorithm** and **input /
 output guardrails**.
 
+**Live app:** [akshayjaitly.github.io/langchain-rag-assistant](https://akshayjaitly.github.io/langchain-rag-assistant/)
+
+**Backend health:** [langchain-rag-assistant-tw27.onrender.com/api/health](https://langchain-rag-assistant-tw27.onrender.com/api/health)
+
 ```
 ┌──────────────┐   /api/upload   ┌────────────────────────────────────────┐
 │ React (Vite) │ ──────────────► │ FastAPI                                │
-│  chat + docs │   /api/query    │  ├─ ingest: PDF/Word/txt → parent+child │
+│ chat + docs  │   /api/query    │  ├─ ingest: PDF/Word/txt/md             │
+│ local profile│                 │  │          → parent + child chunks     │
 └──────────────┘ ◄────────────── │  │            chunks → local embeddings │
                                  │  │            → Chroma (children)         │
                                  │  │            → file docstore (parents)   │
                                  │  └─ LangGraph pipeline:                   │
                                  │       input guardrail → retrieve →        │
-                                 │       generate (Claude) → output guardrail│
+                                 │       generate → output guardrail         │
                                  └────────────────────────────────────────┘
 ```
 
 ## Key pieces
 
-| Concern            | Implementation                                                        |
-| ------------------ | -------------------------------------------------------------------- |
-| Vector DB          | ChromaDB (persistent, cosine)                                        |
-| Embeddings         | `sentence-transformers/all-MiniLM-L6-v2` (local, offline, no cost)   |
-| Parent-child       | LangChain `ParentDocumentRetriever` — embed small chunks, return big |
-| Orchestration      | LangGraph `StateGraph` with conditional guardrail edges             |
-| Generation         | Claude (`claude-sonnet-5`) via `langchain-anthropic`                 |
-| Guardrails         | input (injection / size), grounding (no-context refusal), output (secret redaction + grounding check) |
-| Doc parsing        | `pypdf` (PDF), `docx2txt` (Word), `TextLoader` (txt/md)             |
+| Concern | Implementation |
+| --- | --- |
+| Frontend | React 18 + Vite 6, deployed to GitHub Pages |
+| Backend | FastAPI, deployed to Render |
+| Vector DB | ChromaDB with a file-backed parent document store |
+| Hosted embeddings | FastEmbed `BAAI/bge-small-en-v1.5` (local to the backend, no embedding API) |
+| Local embeddings | Hugging Face `sentence-transformers/all-MiniLM-L6-v2` by default |
+| Parent-child retrieval | LangChain `ParentDocumentRetriever` — embed small chunks, return larger parent chunks |
+| Orchestration | LangGraph `StateGraph` with conditional guardrail edges |
+| Hosted generation | Groq `llama-3.3-70b-versatile` |
+| Other providers | Anthropic, OpenAI, and local Ollama are configurable |
+| Observability | LangSmith traces in project `pr-puzzled-robot-90` |
+| Guardrails | Input injection/size checks, no-context refusal, secret redaction, and grounding checks |
+| Parsing | `pypdf` (PDF), `docx2txt` (Word), `TextLoader` (txt/md) |
+| UI persistence | Display name, avatar, theme, and the latest 100 messages in browser `localStorage` |
 
 ### The parent-child algorithm
 
@@ -41,6 +52,8 @@ in Chroma.
 
 ### The LangGraph pipeline
 
+The hosted deployment currently uses `PIPELINE=simple`:
+
 ```
 START → input_guardrail ─(blocked)────────────────► END
               │
@@ -49,10 +62,26 @@ START → input_guardrail ─(blocked)──────────────
                     (docs) → generate → output_guardrail → END
 ```
 
+An optional corrective pipeline is available with `PIPELINE=multi_agent`:
+
+```text
+START → input_guardrail → retrieve → grade_documents → generate → verify
+                                      │                         │
+                                      └─ no relevant docs       └─ revise once
+                                             ↓                         ↓
+                                         no_context             output_guardrail
+```
+
+The multi-agent pipeline adds relevance grading and answer verification, but it
+also adds model calls and latency. Keep the simple pipeline as the production
+default until both versions have been compared with a LangSmith evaluation
+dataset.
+
 ## Prerequisites
 
-- Python 3.11 or 3.12, and Node 18+
-- An Anthropic API key
+- Python 3.11 or 3.12
+- Node.js 20+
+- One generation provider: Anthropic, OpenAI, Groq, or local Ollama
 
 ## Backend setup
 
@@ -60,12 +89,12 @@ START → input_guardrail ─(blocked)──────────────
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # then edit .env and set ANTHROPIC_API_KEY
+cp .env.example .env          # choose LLM_PROVIDER and set its API key
 uvicorn app.main:app --reload --port 8000
 ```
 
-First run downloads the embedding model (~90 MB) once. API docs at
-`http://localhost:8000/docs`.
+The first run downloads the selected embedding model and caches it locally.
+Interactive API documentation is available at `http://localhost:8000/docs`.
 
 ## Frontend setup
 
@@ -82,15 +111,21 @@ npm run dev                    # http://localhost:5173 (proxies /api → :8000)
    embedded, and indexed.
 3. Ask a question. The answer is grounded in retrieved chunks, shows its
    sources, and displays which guardrails fired.
+4. Use the profile control in the top-right corner to select an included avatar
+   or upload a custom image.
+
+Profile settings and chat history currently persist only in the browser. They
+are not authenticated, shared between devices, or supplied to LangGraph as
+conversation memory.
 
 ## API
 
-| Method | Path             | Body                     | Purpose                        |
-| ------ | ---------------- | ------------------------ | ------------------------------ |
-| GET    | `/api/health`    | –                        | Service + model info           |
-| GET    | `/api/documents` | –                        | List ingested documents        |
-| POST   | `/api/upload`    | multipart `file`         | Ingest a document              |
-| POST   | `/api/query`     | `{"question": "..."}`    | Answer + sources + guardrails  |
+| Method | Path | Body | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/health` | – | Provider, model, embeddings, pipeline, and tracing status |
+| GET | `/api/documents` | – | List documents in the current backend index |
+| POST | `/api/upload` | multipart `file` | Parse, embed, and index a document |
+| POST | `/api/query` | `{"question": "..."}` | Answer, sources, guardrails, blocked status, and LangSmith `trace_id` |
 
 ## Configuration
 
@@ -108,7 +143,7 @@ as metadata.
    [smith.langchain.com](https://smith.langchain.com).
 2. Set `LANGSMITH_API_KEY` as a secret in the Render service.
 3. Keep `LANGSMITH_TRACING=true`. The Render Blueprint already sets the
-   production project name and enables tracing.
+   production project to `pr-puzzled-robot-90` and enables tracing.
 4. If the key can access multiple LangSmith workspaces, also set
    `LANGSMITH_WORKSPACE_ID`.
 
@@ -135,8 +170,10 @@ on any Python host; secrets live there as server-side env vars, never in the
 bundle.
 
 1. **Backend → Render (free):** In Render, *New → Blueprint*, connect this repo
-   (it reads [`render.yaml`](render.yaml)). Set `GROQ_API_KEY` in the dashboard
-   (hidden). Render gives you a URL like `https://rag-backend.onrender.com`.
+   (it reads [`render.yaml`](render.yaml)). Set `GROQ_API_KEY` and
+   `LANGSMITH_API_KEY` in the dashboard as secret environment variables. The
+   current backend is
+   `https://langchain-rag-assistant-tw27.onrender.com`.
 2. **Frontend → point it at the backend:** add an Actions repository variable
    named `VITE_API_BASE` with the full Render URL (repo *Settings → Secrets and
    variables → Actions → Variables*).
@@ -146,10 +183,10 @@ bundle.
 4. **CORS:** already set to `https://akshayjaitly.github.io` in `render.yaml`;
    change it if your Pages origin differs.
 
-> Free-tier notes: Render's free web service sleeps after inactivity (~50 s cold
-> start) and has no persistent disk, so the Chroma index resets on restart —
-> fine for a demo. For always-on + persistence, use a paid disk or a host with
-> more RAM (e.g. Hugging Face Spaces gives 16 GB free).
+> Free-tier note: the Render service can spin down while idle and does not have
+> a persistent disk. Uploaded files, Chroma vectors, the parent docstore, and
+> the document manifest can therefore disappear after a restart or redeploy.
+> Production persistence requires a persistent disk or a managed vector store.
 
 Embeddings are always local (free); only generation differs. To go fully
 offline at $0:
@@ -173,4 +210,6 @@ OLLAMA_MODEL=llama3.1:8b
 - Embeddings run locally, so re-indexing and retrieval cost nothing.
 - Guardrails here are intentionally lightweight/heuristic — for production,
   consider a dedicated moderation model and a stricter faithfulness grader.
-```
+- The current browser history is presentation persistence, not LangGraph
+  conversational memory. Server-side threads require a LangGraph checkpointer
+  and authenticated storage.
