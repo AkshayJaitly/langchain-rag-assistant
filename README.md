@@ -163,6 +163,11 @@ OLLAMA_MODEL=llama3.1:8b
 ## Working Site Preview(local)
 <img width="1144" height="622" alt="Screenshot 2026-07-29 at 1 18 37 PM" src="https://github.com/user-attachments/assets/bb4149fc-cd67-40a4-9b64-d4f944fbdc3f" />
 
+## Langsmith dash
+
+<img width="977" height="592" alt="Screenshot 2026-07-29 at 5 19 29 PM" src="https://github.com/user-attachments/assets/0fc2ac5e-1db2-4bb3-9f17-7c61339d04c8" />
+
+
 ## Notes
 
 - Embeddings run locally, so re-indexing and retrieval cost nothing.
