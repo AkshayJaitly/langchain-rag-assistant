@@ -48,6 +48,8 @@ def health() -> dict[str, str]:
         "llm_provider": settings.llm_provider,
         "llm_model": active_model,
         "embedding_model": settings.embedding_model,
+        "pipeline": settings.pipeline,
+        "tracing": "on" if settings.langsmith_tracing else "off",
     }
 
 
