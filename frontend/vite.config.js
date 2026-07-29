@@ -10,7 +10,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        // Use an explicit IPv4 address so the proxy and Uvicorn agree even
+        // when `localhost` resolves to IPv6 first.
+        target: "http://127.0.0.1:8000",
         changeOrigin: true,
       },
     },
