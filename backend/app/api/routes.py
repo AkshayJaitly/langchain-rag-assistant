@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.rag.graph import answer_question
@@ -43,11 +44,17 @@ def health() -> dict[str, str]:
         "openai": settings.openai_model,
         "groq": settings.groq_model,
     }.get(settings.llm_provider.lower(), settings.llm_model)
+    active_embedding_model = (
+        settings.fastembed_model
+        if settings.embedding_backend.lower() == "fastembed"
+        else settings.embedding_model
+    )
     return {
         "status": "ok",
         "llm_provider": settings.llm_provider,
         "llm_model": active_model,
-        "embedding_model": settings.embedding_model,
+        "embedding_backend": settings.embedding_backend,
+        "embedding_model": active_embedding_model,
         "pipeline": settings.pipeline,
         "tracing": "on" if settings.langsmith_tracing else "off",
     }
@@ -76,7 +83,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
 
     path = save_upload(contents, filename, settings.upload_dir)
     try:
-        count = ingest_file(path, filename)
+        count = await run_in_threadpool(ingest_file, path, filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

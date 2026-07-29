@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     embedding_backend: str = "huggingface"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     fastembed_model: str = "BAAI/bge-small-en-v1.5"
+    fastembed_cache_dir: str = ""
 
     # Persistence
     chroma_dir: str = "./data/chroma"
