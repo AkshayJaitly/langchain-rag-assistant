@@ -104,7 +104,29 @@ Set `LLM_PROVIDER` in `backend/.env`:
 | `LLM_PROVIDER` | Cost      | Setup                                                            |
 | -------------- | --------- | --------------------------------------------------------------- |
 | `anthropic`    | paid API  | Set `ANTHROPIC_API_KEY`; pick `LLM_MODEL` (`claude-haiku-4-5` = cheapest, `claude-sonnet-5` = balanced, `claude-opus-5` = best). |
-| `ollama`       | **free**  | Install [Ollama](https://ollama.com), run `ollama pull llama3.1:8b`, set `OLLAMA_MODEL`. No API key needed. |
+| `openai`       | paid API  | Set `OPENAI_API_KEY`; pick `OPENAI_MODEL` (default `gpt-4o-mini`). |
+| `groq`         | **free**  | Free key at [console.groq.com](https://console.groq.com); set `GROQ_API_KEY`. Fast hosted Llama — ideal for a $0 always-on deploy. |
+| `ollama`       | **free**  | Install [Ollama](https://ollama.com), run `ollama pull llama3.1:8b`, set `OLLAMA_MODEL`. No API key; local only (won't fit free cloud tiers). |
+
+## Deploying (free)
+
+GitHub Pages hosts the **frontend** (static, no secrets). The **backend** runs
+on any Python host; secrets live there as server-side env vars, never in the
+bundle.
+
+1. **Backend → Render (free):** In Render, *New → Blueprint*, connect this repo
+   (it reads [`render.yaml`](render.yaml)). Set `GROQ_API_KEY` in the dashboard
+   (hidden). Render gives you a URL like `https://rag-backend.onrender.com`.
+2. **Frontend → point it at the backend:** rebuild Pages with
+   `VITE_API_BASE=https://<your-backend-url>` (repo *Settings → Actions →
+   Variables*, or pass at build time).
+3. **CORS:** already set to `https://akshayjaitly.github.io` in `render.yaml`;
+   change it if your Pages origin differs.
+
+> Free-tier notes: Render's free web service sleeps after inactivity (~50 s cold
+> start) and has no persistent disk, so the Chroma index resets on restart —
+> fine for a demo. For always-on + persistence, use a paid disk or a host with
+> more RAM (e.g. Hugging Face Spaces gives 16 GB free).
 
 Embeddings are always local (free); only generation differs. To go fully
 offline at $0:

@@ -12,7 +12,8 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    # LLM provider: "anthropic" (Claude), "openai" (GPT), or "ollama" (local/free)
+    # LLM provider: "anthropic" (Claude), "openai" (GPT), "groq" (free/fast
+    # hosted Llama), or "ollama" (local/free)
     llm_provider: str = "anthropic"
     llm_max_tokens: int = 2048
 
@@ -27,6 +28,10 @@ class Settings(BaseSettings):
     # OpenAI (used when llm_provider == "openai")
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+
+    # Groq (used when llm_provider == "groq"; free tier at console.groq.com)
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
 
     # Ollama (used when llm_provider == "ollama")
     ollama_model: str = "llama3.1:8b"

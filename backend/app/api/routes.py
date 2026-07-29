@@ -38,11 +38,11 @@ class UploadResponse(BaseModel):
 @router.get("/health")
 def health() -> dict[str, str]:
     settings = get_settings()
-    active_model = (
-        settings.ollama_model
-        if settings.llm_provider.lower() == "ollama"
-        else settings.llm_model
-    )
+    active_model = {
+        "ollama": settings.ollama_model,
+        "openai": settings.openai_model,
+        "groq": settings.groq_model,
+    }.get(settings.llm_provider.lower(), settings.llm_model)
     return {
         "status": "ok",
         "llm_provider": settings.llm_provider,

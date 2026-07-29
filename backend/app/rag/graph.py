@@ -76,6 +76,16 @@ def _get_llm() -> BaseChatModel:
             temperature=0,
         )
 
+    if provider == "groq":
+        from langchain_groq import ChatGroq
+
+        return ChatGroq(
+            model=settings.groq_model,
+            api_key=settings.groq_api_key,
+            max_tokens=settings.llm_max_tokens,
+            temperature=0,
+        )
+
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
@@ -87,7 +97,7 @@ def _get_llm() -> BaseChatModel:
 
     raise ValueError(
         f"Unknown LLM_PROVIDER '{settings.llm_provider}'. "
-        "Use 'anthropic', 'openai', or 'ollama'."
+        "Use 'anthropic', 'openai', 'groq', or 'ollama'."
     )
 
 
