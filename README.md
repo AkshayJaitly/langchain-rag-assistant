@@ -97,6 +97,26 @@ npm run dev                    # http://localhost:5173 (proxies /api → :8000)
 All settings are environment variables (see `backend/.env.example`): model,
 chunk sizes, retrieval `k`, persistence directories, CORS origins.
 
+## LangSmith tracing
+
+The backend emits one LangSmith trace per `/api/query` request, with child runs
+for the LangGraph nodes, retriever, and model calls. Traces are tagged with the
+environment, pipeline, and model provider and include retrieval configuration
+as metadata.
+
+1. Create a LangSmith API key at
+   [smith.langchain.com](https://smith.langchain.com).
+2. Set `LANGSMITH_API_KEY` as a secret in the Render service.
+3. Keep `LANGSMITH_TRACING=true`. The Render Blueprint already sets the
+   production project name and enables tracing.
+4. If the key can access multiple LangSmith workspaces, also set
+   `LANGSMITH_WORKSPACE_ID`.
+
+`LANGSMITH_HIDE_INPUTS` and `LANGSMITH_HIDE_OUTPUTS` default to `true`, so
+uploaded document content, questions, and answers are not sent in trace
+payloads. For a non-sensitive demo, set them to `false` to inspect prompts,
+retrieved context, and generated answers in LangSmith.
+
 ## Choosing the generation model
 
 Set `LLM_PROVIDER` in `backend/.env`:

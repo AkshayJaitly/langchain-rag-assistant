@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from typing import Any, TypedDict
+from uuid import uuid4
 
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -345,6 +346,7 @@ def build_multi_agent_graph():
 def answer_question(question: str) -> dict[str, Any]:
     """Run the configured RAG graph and return a serializable result."""
     settings = get_settings()
+    trace_id = uuid4()
     app = (
         build_multi_agent_graph()
         if settings.pipeline.lower() == "multi_agent"
@@ -357,11 +359,33 @@ def answer_question(question: str) -> dict[str, Any]:
             "documents": [],
             "sources": [],
             "refine_count": 0,
-        }
+        },
+        config={
+            "run_id": trace_id,
+            "run_name": "rag-query",
+            "tags": [
+                "rag",
+                f"environment:{settings.langsmith_environment}",
+                f"pipeline:{settings.pipeline.lower()}",
+                f"provider:{settings.llm_provider.lower()}",
+            ],
+            "metadata": {
+                "environment": settings.langsmith_environment,
+                "pipeline": settings.pipeline.lower(),
+                "llm_provider": settings.llm_provider.lower(),
+                "embedding_backend": settings.embedding_backend.lower(),
+                "retrieval_k": settings.retrieval_k,
+            },
+        },
     )
     return {
         "answer": final.get("answer", ""),
         "sources": final.get("sources", []),
         "guardrails": final.get("guardrails", []),
         "blocked": final.get("blocked", False),
+        "trace_id": (
+            str(trace_id)
+            if settings.langsmith_tracing and settings.langsmith_api_key
+            else None
+        ),
     }

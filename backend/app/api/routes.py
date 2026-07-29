@@ -5,7 +5,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from app.config import get_settings
+from app.config import get_settings, langsmith_enabled
 from app.rag.graph import answer_question
 from app.rag.ingest import SUPPORTED_EXTENSIONS, ingest_file, save_upload
 from app.rag.vectorstore import read_manifest
@@ -29,6 +29,7 @@ class QueryResponse(BaseModel):
     sources: list[Source]
     guardrails: list[str]
     blocked: bool
+    trace_id: str | None = None
 
 
 class UploadResponse(BaseModel):
@@ -56,7 +57,7 @@ def health() -> dict[str, str]:
         "embedding_backend": settings.embedding_backend,
         "embedding_model": active_embedding_model,
         "pipeline": settings.pipeline,
-        "tracing": "on" if settings.langsmith_tracing else "off",
+        "tracing": "on" if langsmith_enabled(settings) else "off",
     }
 
 

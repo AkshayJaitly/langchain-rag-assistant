@@ -67,10 +67,19 @@ class Settings(BaseSettings):
     langsmith_api_key: str = ""
     langsmith_project: str = "rag-assistant"
     langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_workspace_id: str = ""
+    langsmith_environment: str = "development"
+    langsmith_hide_inputs: bool = True
+    langsmith_hide_outputs: bool = True
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+def langsmith_enabled(settings: "Settings") -> bool:
+    """Return whether tracing has both been requested and authenticated."""
+    return settings.langsmith_tracing and bool(settings.langsmith_api_key.strip())
 
 
 def configure_langsmith(settings: "Settings") -> bool:
@@ -79,8 +88,25 @@ def configure_langsmith(settings: "Settings") -> bool:
     LangChain reads these from os.environ, so we bridge them from settings.
     Returns True if tracing was enabled.
     """
-    if not settings.langsmith_tracing or not settings.langsmith_api_key:
+    if not langsmith_enabled(settings):
         return False
+
+    # Current LangSmith environment variable names.
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
+    os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
+    os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
+    os.environ["LANGSMITH_HIDE_INPUTS"] = str(
+        settings.langsmith_hide_inputs
+    ).lower()
+    os.environ["LANGSMITH_HIDE_OUTPUTS"] = str(
+        settings.langsmith_hide_outputs
+    ).lower()
+    if settings.langsmith_workspace_id:
+        os.environ["LANGSMITH_WORKSPACE_ID"] = settings.langsmith_workspace_id
+
+    # Legacy names remain set for compatibility with the project's pinned
+    # LangChain/LangGraph versions.
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
     os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project

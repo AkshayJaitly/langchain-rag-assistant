@@ -18,6 +18,22 @@ services:
         sync: false # <-- set this secret in the Render dashboard, not in code
       - key: PIPELINE
         value: simple
+      # LangSmith traces every LangGraph request. Create the key at
+      # https://smith.langchain.com and set it in the Render dashboard.
+      - key: LANGSMITH_TRACING
+        value: "true"
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_PROJECT
+        value: rag-assistant-production
+      - key: LANGSMITH_ENVIRONMENT
+        value: production
+      # Safe default for uploaded documents. Set these to false only when the
+      # traced questions, context, and answers contain no sensitive data.
+      - key: LANGSMITH_HIDE_INPUTS
+        value: "true"
+      - key: LANGSMITH_HIDE_OUTPUTS
+        value: "true"
       # Allow the GitHub Pages origin to call this API (CORS).
       - key: CORS_ORIGINS
         value: https://akshayjaitly.github.io
