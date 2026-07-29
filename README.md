@@ -51,7 +51,7 @@ START → input_guardrail ─(blocked)──────────────
 
 ## Prerequisites
 
-- Python 3.11+ and Node 18+
+- Python 3.11 or 3.12, and Node 18+
 - An Anthropic API key
 
 ## Backend setup
@@ -71,7 +71,7 @@ First run downloads the embedding model (~90 MB) once. API docs at
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev                    # http://localhost:5173 (proxies /api → :8000)
 ```
 
@@ -117,10 +117,13 @@ bundle.
 1. **Backend → Render (free):** In Render, *New → Blueprint*, connect this repo
    (it reads [`render.yaml`](render.yaml)). Set `GROQ_API_KEY` in the dashboard
    (hidden). Render gives you a URL like `https://rag-backend.onrender.com`.
-2. **Frontend → point it at the backend:** rebuild Pages with
-   `VITE_API_BASE=https://<your-backend-url>` (repo *Settings → Actions →
-   Variables*, or pass at build time).
-3. **CORS:** already set to `https://akshayjaitly.github.io` in `render.yaml`;
+2. **Frontend → point it at the backend:** add an Actions repository variable
+   named `VITE_API_BASE` with the full Render URL (repo *Settings → Secrets and
+   variables → Actions → Variables*).
+3. **GitHub Pages:** under *Settings → Pages → Build and deployment*, choose
+   **GitHub Actions** as the source. Pushes that change `frontend/` or the Pages
+   workflow then rebuild and publish the site automatically.
+4. **CORS:** already set to `https://akshayjaitly.github.io` in `render.yaml`;
    change it if your Pages origin differs.
 
 > Free-tier notes: Render's free web service sleeps after inactivity (~50 s cold

@@ -1,5 +1,8 @@
 # Web
 fastapi==0.115.6
+# FastAPI 0.115.x requires Starlette <0.42. Pin it explicitly so an unrelated
+# package upgrade cannot install an incompatible 1.x release.
+starlette==0.41.3
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 pydantic-settings==2.7.1
