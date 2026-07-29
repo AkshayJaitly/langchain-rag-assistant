@@ -140,6 +140,9 @@ LLM_PROVIDER=ollama
 OLLAMA_MODEL=llama3.1:8b
 ```
 
+## Working Site Preview(local)
+<img width="1144" height="622" alt="Screenshot 2026-07-29 at 1 18 37 PM" src="https://github.com/user-attachments/assets/bb4149fc-cd67-40a4-9b64-d4f944fbdc3f" />
+
 ## Notes
 
 - Embeddings run locally, so re-indexing and retrieval cost nothing.
