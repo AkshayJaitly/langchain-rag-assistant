@@ -12,6 +12,17 @@ const EXAMPLES = [
   "What isn't covered?",
 ];
 
+async function responseData(res) {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (!res.ok) throw new Error(text);
+    throw new Error("The server returned an invalid response.");
+  }
+}
+
 function guardrailKind(g) {
   if (g.startsWith("input")) return "danger";
   if (g.startsWith("output")) return "warn";
@@ -70,7 +81,11 @@ function Message({ msg }) {
       <div className="assistant-card">
         <AnswerText text={msg.content} />
         <div className="meta">
-          <Guardrails guardrails={msg.guardrails} />
+          {msg.error ? (
+            <span className="chip danger">request failed</span>
+          ) : (
+            <Guardrails guardrails={msg.guardrails} />
+          )}
         </div>
         {msg.sources && msg.sources.length > 0 && (
           <details className="sources">
@@ -123,7 +138,7 @@ export default function App() {
   const refreshDocs = async () => {
     try {
       const res = await fetch(`${API}/api/documents`);
-      const data = await res.json();
+      const data = await responseData(res);
       setDocs(data.documents || []);
     } catch {
       /* backend not up yet */
@@ -133,7 +148,7 @@ export default function App() {
   const refreshHealth = async () => {
     try {
       const res = await fetch(`${API}/api/health`);
-      setHealth(res.ok ? await res.json() : null);
+      setHealth(res.ok ? await responseData(res) : null);
     } catch {
       setHealth(null);
     }
@@ -160,7 +175,7 @@ export default function App() {
     form.append("file", file);
     try {
       const res = await fetch(`${API}/api/upload`, { method: "POST", body: form });
-      const data = await res.json();
+      const data = await responseData(res);
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       setStatus({
         type: "ok",
@@ -186,7 +201,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),
       });
-      const data = await res.json();
+      const data = await responseData(res);
       if (!res.ok) throw new Error(data.detail || "Query failed");
       setMessages((m) => [
         ...m,
@@ -200,7 +215,7 @@ export default function App() {
     } catch (err) {
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: `Error: ${err.message}`, guardrails: [] },
+        { role: "assistant", content: `Error: ${err.message}`, error: true },
       ]);
     } finally {
       setLoading(false);

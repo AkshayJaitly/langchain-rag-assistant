@@ -24,7 +24,10 @@ langgraph==0.2.62
 # Vector DB + embeddings
 chromadb==0.5.23
 sentence-transformers==3.3.1
-fastembed==0.5.1
+# fastembed 0.5.1 requires NumPy 2 on Python 3.13, while this Chroma release
+# requires NumPy 1.x. Hosted containers use Python 3.11; local Python 3.13 uses
+# the default sentence-transformers backend instead.
+fastembed==0.5.1; python_version < "3.13"
 
 # Document parsing
 pypdf==5.1.0
