@@ -5,12 +5,61 @@ import "./App.css";
 // On GitHub Pages set VITE_API_BASE to your hosted backend URL at build time.
 // No API keys ever live here — they stay server-side on the backend.
 const API = import.meta.env.VITE_API_BASE || "";
+const HISTORY_KEY = "rag-chat-history-v1";
+const PROFILE_KEY = "rag-profile-v1";
+const DEFAULT_AVATARS = Array.from(
+  { length: 6 },
+  (_, index) => `${import.meta.env.BASE_URL}avatars/avatar-${index + 1}.png`
+);
 
 const EXAMPLES = [
   "Summarize the key points",
   "What are the main terms?",
   "What isn't covered?",
 ];
+
+function loadStored(key, fallback) {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function resizeProfileImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read that image."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("That image could not be opened."));
+      image.onload = () => {
+        const size = Math.min(image.width, image.height);
+        const sourceX = (image.width - size) / 2;
+        const sourceY = (image.height - size) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 256;
+        const context = canvas.getContext("2d");
+        context.drawImage(
+          image,
+          sourceX,
+          sourceY,
+          size,
+          size,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        );
+        resolve(canvas.toDataURL("image/jpeg", 0.86));
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 async function responseData(res) {
   const text = await res.text();
@@ -67,11 +116,17 @@ function AnswerText({ text }) {
   );
 }
 
-function Message({ msg }) {
+function Message({ msg, profile }) {
   if (msg.role === "user") {
     return (
       <div className="row user">
         <div className="bubble user">{msg.content}</div>
+        <img
+          className="message-user-avatar"
+          src={profile.avatar}
+          alt=""
+          aria-hidden="true"
+        />
       </div>
     );
   }
@@ -114,13 +169,26 @@ function Message({ msg }) {
 
 export default function App() {
   const [docs, setDocs] = useState([]);
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() =>
+    loadStored(HISTORY_KEY, [])
+  );
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [status, setStatus] = useState(null);
   const [health, setHealth] = useState(null);
   const [healthChecking, setHealthChecking] = useState(true);
+  const [profile, setProfile] = useState(() =>
+    loadStored(PROFILE_KEY, {
+      name: "Guest",
+      avatar: DEFAULT_AVATARS[0],
+    })
+  );
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [draftName, setDraftName] = useState(profile.name);
+  const [draftAvatar, setDraftAvatar] = useState(profile.avatar);
+  const [profileError, setProfileError] = useState("");
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
@@ -130,11 +198,38 @@ export default function App() {
   });
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
+  const profileMenuRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(messages.slice(-100)));
+    } catch {
+      /* Storage can be unavailable in private browsing. */
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+    } catch {
+      /* Custom images can exceed a browser's storage allowance. */
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    const closeProfileMenu = (event) => {
+      if (!profileMenuRef.current?.contains(event.target)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeProfileMenu);
+    return () => document.removeEventListener("pointerdown", closeProfileMenu);
+  }, []);
 
   const refreshDocs = async () => {
     try {
@@ -255,6 +350,45 @@ export default function App() {
     ask(question.trim());
   };
 
+  const openProfileEditor = () => {
+    setDraftName(profile.name);
+    setDraftAvatar(profile.avatar);
+    setProfileError("");
+    setProfileMenuOpen(false);
+    setProfileModalOpen(true);
+  };
+
+  const handleProfileImage = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setProfileError("Choose a PNG, JPG, WebP, or GIF image.");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setProfileError("Choose an image smaller than 8 MB.");
+      event.target.value = "";
+      return;
+    }
+    try {
+      setDraftAvatar(await resizeProfileImage(file));
+      setProfileError("");
+    } catch (error) {
+      setProfileError(error.message);
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const saveProfile = () => {
+    setProfile({
+      name: draftName.trim().slice(0, 32) || "Guest",
+      avatar: draftAvatar || DEFAULT_AVATARS[0],
+    });
+    setProfileModalOpen(false);
+  };
+
   const backendUp = health != null;
 
   return (
@@ -346,6 +480,45 @@ export default function App() {
             >
               {theme === "dark" ? "☀" : "☾"}
             </button>
+            <div className="profile-wrap" ref={profileMenuRef}>
+              <button
+                type="button"
+                className="profile-trigger"
+                onClick={() => setProfileMenuOpen((open) => !open)}
+                aria-label={`Open ${profile.name}'s profile menu`}
+                aria-expanded={profileMenuOpen}
+              >
+                <img src={profile.avatar} alt="" />
+                <span className="profile-name">{profile.name}</span>
+                <span className="profile-chevron" aria-hidden="true">
+                  ⌄
+                </span>
+              </button>
+              {profileMenuOpen && (
+                <div className="profile-menu">
+                  <div className="profile-menu-head">
+                    <img src={profile.avatar} alt="" />
+                    <div>
+                      <strong>{profile.name}</strong>
+                      <span>Saved on this device</span>
+                    </div>
+                  </div>
+                  <button type="button" onClick={openProfileEditor}>
+                    <span aria-hidden="true">✎</span> Manage profile
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMessages([]);
+                      setProfileMenuOpen(false);
+                    }}
+                    disabled={messages.length === 0}
+                  >
+                    <span aria-hidden="true">↺</span> Clear chat history
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -373,7 +546,7 @@ export default function App() {
             </div>
           )}
           {messages.map((m, i) => (
-            <Message key={i} msg={m} />
+            <Message key={i} msg={m} profile={profile} />
           ))}
           {loading && (
             <div className="row assistant">
@@ -403,6 +576,111 @@ export default function App() {
           </button>
         </form>
       </main>
+
+      {profileModalOpen && (
+        <div
+          className="profile-overlay"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setProfileModalOpen(false);
+          }}
+        >
+          <section
+            className="profile-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="profile-dialog-title"
+          >
+            <div className="profile-dialog-head">
+              <div>
+                <span className="profile-kicker">Your space</span>
+                <h2 id="profile-dialog-title">Choose your profile</h2>
+                <p>Your name, avatar, and chat history stay on this device.</p>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                onClick={() => setProfileModalOpen(false)}
+                aria-label="Close profile editor"
+              >
+                ×
+              </button>
+            </div>
+
+            <label className="profile-field">
+              <span>Display name</span>
+              <input
+                type="text"
+                value={draftName}
+                maxLength={32}
+                onChange={(event) => setDraftName(event.target.value)}
+                placeholder="Guest"
+              />
+            </label>
+
+            <div className="profile-field">
+              <span>Pick an avatar</span>
+              <div className="avatar-grid">
+                {DEFAULT_AVATARS.map((avatar, index) => (
+                  <button
+                    key={avatar}
+                    type="button"
+                    className={`avatar-choice ${
+                      draftAvatar === avatar ? "selected" : ""
+                    }`}
+                    onClick={() => {
+                      setDraftAvatar(avatar);
+                      setProfileError("");
+                    }}
+                    aria-label={`Choose avatar ${index + 1}`}
+                    aria-pressed={draftAvatar === avatar}
+                  >
+                    <img src={avatar} alt={`Anime avatar ${index + 1}`} />
+                    {draftAvatar === avatar && (
+                      <span className="avatar-check" aria-hidden="true">
+                        ✓
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <label className="custom-avatar">
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={handleProfileImage}
+                hidden
+              />
+              <span className="custom-avatar-icon" aria-hidden="true">
+                ↑
+              </span>
+              <span>
+                <strong>Upload your own</strong>
+                <small>Square crop · up to 8 MB</small>
+              </span>
+              {draftAvatar?.startsWith("data:image") && (
+                <img src={draftAvatar} alt="Your custom avatar preview" />
+              )}
+            </label>
+            {profileError && <p className="profile-error">{profileError}</p>}
+
+            <div className="profile-actions">
+              <button
+                type="button"
+                className="profile-cancel"
+                onClick={() => setProfileModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button type="button" className="profile-save" onClick={saveProfile}>
+                Save profile
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
