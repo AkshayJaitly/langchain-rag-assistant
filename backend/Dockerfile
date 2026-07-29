@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
+# Use the low-memory ONNX embedding backend in hosted containers (fits 512 MB).
+ENV EMBEDDING_BACKEND=fastembed
+
 # Hosts (Render, HF Spaces, Fly) inject $PORT; default to 8000 locally.
 ENV PORT=8000
 EXPOSE 8000

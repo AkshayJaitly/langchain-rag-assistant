@@ -38,7 +38,11 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
 
     # Embeddings
+    # backend: "huggingface" (torch/sentence-transformers, best quality, heavy)
+    #          or "fastembed" (ONNX, low-memory — fits small hosts like Render free)
+    embedding_backend: str = "huggingface"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    fastembed_model: str = "BAAI/bge-small-en-v1.5"
 
     # Persistence
     chroma_dir: str = "./data/chroma"
