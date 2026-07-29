@@ -120,6 +120,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [status, setStatus] = useState(null);
   const [health, setHealth] = useState(null);
+  const [healthChecking, setHealthChecking] = useState(true);
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
@@ -146,17 +147,44 @@ export default function App() {
   };
 
   const refreshHealth = async () => {
+    setHealthChecking(true);
     try {
       const res = await fetch(`${API}/api/health`);
-      setHealth(res.ok ? await responseData(res) : null);
+      if (!res.ok) {
+        setHealth(null);
+        return false;
+      }
+      setHealth(await responseData(res));
+      return true;
     } catch {
       setHealth(null);
+      return false;
+    } finally {
+      setHealthChecking(false);
     }
   };
 
   useEffect(() => {
     refreshDocs();
-    refreshHealth();
+    let cancelled = false;
+    let retryTimer;
+    const retryDelays = [0, 3000, 10000, 30000];
+
+    const checkBackend = async (attempt) => {
+      const isUp = await refreshHealth();
+      if (!cancelled && !isUp && attempt + 1 < retryDelays.length) {
+        retryTimer = window.setTimeout(
+          () => checkBackend(attempt + 1),
+          retryDelays[attempt + 1]
+        );
+      }
+    };
+
+    checkBackend(0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+    };
   }, []);
 
   useEffect(() => {
@@ -296,12 +324,20 @@ export default function App() {
                 Clear
               </button>
             )}
-            <span className={`status-pill ${backendUp ? "up" : "down"}`}>
+            <button
+              type="button"
+              className={`status-pill ${backendUp ? "up" : "down"}`}
+              onClick={refreshHealth}
+              disabled={healthChecking}
+              title={backendUp ? "Check backend again" : "Retry backend connection"}
+            >
               <span className="status-dot" />
-              {backendUp
+              {healthChecking
+                ? "connecting…"
+                : backendUp
                 ? `${health.llm_provider} · ${health.llm_model}`
-                : "backend offline"}
-            </span>
+                : "backend offline · retry"}
+            </button>
             <button
               className="icon-btn"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}

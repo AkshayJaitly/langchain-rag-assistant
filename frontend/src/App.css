@@ -273,6 +273,11 @@
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   font-family: var(--mono);
+  cursor: pointer;
+}
+.status-pill:disabled {
+  cursor: wait;
+  opacity: 0.75;
 }
 .status-dot {
   width: 7px;
