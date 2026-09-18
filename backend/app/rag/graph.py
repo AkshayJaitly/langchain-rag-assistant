@@ -31,7 +31,8 @@ SYSTEM_PROMPT = (
     "ONLY the information in the provided context. Follow these rules:\n"
     "- If the context does not contain the answer, say you don't know. Never "
     "invent facts or rely on outside knowledge.\n"
-    "- Cite the sources you used with their bracketed numbers, e.g. [1], [2].\n"
+    "- Cite the sources you used with their bracketed numbers, using plain "
+    "ASCII square brackets, e.g. [1], [2].\n"
     "- Be concise and factual."
 )
 
@@ -80,11 +81,20 @@ def _get_llm() -> BaseChatModel:
     if provider == "groq":
         from langchain_groq import ChatGroq
 
+        extra: dict[str, Any] = {}
+        if settings.groq_model.startswith("openai/gpt-oss"):
+            # Reasoning tokens come out of max_tokens; keep the budget small so
+            # the model does not think its way past the answer.
+            extra["model_kwargs"] = {
+                "reasoning_effort": settings.groq_reasoning_effort
+            }
+
         return ChatGroq(
             model=settings.groq_model,
             api_key=settings.groq_api_key,
             max_tokens=settings.llm_max_tokens,
             temperature=0,
+            **extra,
         )
 
     if provider == "anthropic":
@@ -100,6 +110,32 @@ def _get_llm() -> BaseChatModel:
         f"Unknown LLM_PROVIDER '{settings.llm_provider}'. "
         "Use 'anthropic', 'openai', 'groq', or 'ollama'."
     )
+
+
+# gpt-oss emits OpenAI-style file citations in full-width brackets, sometimes
+# with a source suffix -- U+3010 3 U+2020 a U+3011. The UI renders citation
+# pills from ASCII [n] only, so fold them back.
+_FULLWIDTH_CITE_RE = re.compile(r"\u3010(\d+)[^\u3011]*\u3011")
+# Narrow no-break spaces from the same models break word-level matching.
+_ODD_SPACE_RE = re.compile(r"[\u202f\u2009\u00a0]")
+
+
+def _normalize_citations(text: str) -> str:
+    return _ODD_SPACE_RE.sub(" ", _FULLWIDTH_CITE_RE.sub(r"[\1]", text))
+
+
+def probe_llm() -> str:
+    """One cheap generation to prove the configured model actually answers.
+
+    A provider retiring a model (Groq did exactly that to llama-3.3-70b) only
+    shows up as a 500 on the first real question, long after deploy. Probing at
+    startup turns that into a log line and a health-check field.
+    """
+    try:
+        _get_llm().invoke([HumanMessage(content="Reply with: ok")])
+    except Exception as exc:  # noqa: BLE001 - reported, not handled
+        return f"{type(exc).__name__}: {exc}"
+    return "ok"
 
 
 def _format_context(documents: list[Document]) -> str:
@@ -144,10 +180,27 @@ def input_guardrail_node(state: RAGState) -> RAGState:
     return {"blocked": False, "guardrails": triggered}
 
 
+def _dedupe(documents: list[Document]) -> list[Document]:
+    """Drop repeat parents, keeping first-seen order.
+
+    Several child chunks often resolve to the same parent, which otherwise shows
+    up as the same passage cited twice under different numbers.
+    """
+    seen: set[tuple[str, str]] = set()
+    unique = []
+    for doc in documents:
+        key = (str(doc.metadata.get("source", "")), doc.page_content)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(doc)
+    return unique
+
+
 def retrieve_node(state: RAGState) -> RAGState:
     retriever = get_retriever()
-    docs = retriever.invoke(state["question"])
-    return {"documents": docs}
+    docs = _dedupe(retriever.invoke(state["question"]))
+    return {"documents": docs[: get_settings().retrieval_k]}
 
 
 def no_context_node(state: RAGState) -> RAGState:
@@ -173,7 +226,10 @@ def generate_node(state: RAGState) -> RAGState:
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=human)]
     response = _get_llm().invoke(messages)
     answer = response.content if isinstance(response.content, str) else str(response.content)
-    return {"answer": answer, "sources": _sources_payload(documents)}
+    return {
+        "answer": _normalize_citations(answer),
+        "sources": _sources_payload(documents),
+    }
 
 
 # --- Multi-agent nodes (grader + verifier) -------------------------------

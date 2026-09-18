@@ -3,13 +3,10 @@ from __future__ import annotations
 
 import os
 
-from langchain_community.document_loaders import (
-    Docx2txtLoader,
-    PyPDFLoader,
-    TextLoader,
-)
+from langchain_community.document_loaders import Docx2txtLoader, TextLoader
 from langchain_core.documents import Document
 
+from app.rag.pdf import extract_pages
 from app.rag.vectorstore import get_retriever, record_ingested
 
 SUPPORTED_EXTENSIONS = {"pdf", "docx", "doc", "txt", "md"}
@@ -19,12 +16,38 @@ def _extension(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
+SCANNED_PDF_MESSAGE = (
+    "No text could be extracted from this PDF -- it looks like a scan or images "
+    "of pages. Upload a text-based PDF, or run OCR on it first."
+)
+
+
 def load_document(path: str, filename: str) -> list[Document]:
-    """Parse a PDF / Word / text file into LangChain Documents."""
+    """Parse a PDF / Word / text file into LangChain Documents.
+
+    PDFs go through app.rag.pdf, which keeps reading order and table structure
+    that the plain PyPDF path used to lose. Other formats are simple enough that
+    the stock loaders are fine.
+    """
     ext = _extension(filename)
     if ext == "pdf":
-        loader = PyPDFLoader(path)
-    elif ext in {"docx", "doc"}:
+        pages, empty_pages = extract_pages(path)
+        if not pages:
+            raise ValueError(SCANNED_PDF_MESSAGE)
+        return [
+            Document(
+                page_content=page.text,
+                metadata={
+                    "source": filename,
+                    "page": page.number,
+                    # Surfaced so a partly-scanned PDF is visible, not silent.
+                    "pages_without_text": empty_pages,
+                },
+            )
+            for page in pages
+        ]
+
+    if ext in {"docx", "doc"}:
         loader = Docx2txtLoader(path)
     elif ext in {"txt", "md"}:
         loader = TextLoader(path, encoding="utf-8")
@@ -41,10 +64,10 @@ def load_document(path: str, filename: str) -> list[Document]:
     return docs
 
 
-def ingest_file(path: str, filename: str) -> int:
+def ingest_file(path: str, filename: str) -> tuple[int, int]:
     """Load a file, split it into parent/child chunks, embed and store it.
 
-    Returns the number of source documents ingested.
+    Returns (documents ingested, pages that yielded no text).
     """
     ext = _extension(filename)
     if ext not in SUPPORTED_EXTENSIONS:
@@ -61,8 +84,9 @@ def ingest_file(path: str, filename: str) -> int:
     # ParentDocumentRetriever handles parent+child splitting and embedding.
     retriever.add_documents(docs)
 
+    skipped = docs[0].metadata.get("pages_without_text", 0)
     record_ingested(filename, len(docs))
-    return len(docs)
+    return len(docs), skipped
 
 
 def save_upload(tmp_bytes: bytes, filename: str, upload_dir: str) -> str:

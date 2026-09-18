@@ -178,6 +178,8 @@ export default function App() {
   const [status, setStatus] = useState(null);
   const [health, setHealth] = useState(null);
   const [healthChecking, setHealthChecking] = useState(true);
+  // True while we are still retrying a backend that may just be asleep.
+  const [waking, setWaking] = useState(false);
   const [profile, setProfile] = useState(() =>
     loadStored(PROFILE_KEY, {
       name: "Guest",
@@ -234,10 +236,12 @@ export default function App() {
   const refreshDocs = async () => {
     try {
       const res = await fetch(`${API}/api/documents`);
+      if (!res.ok) return false;
       const data = await responseData(res);
       setDocs(data.documents || []);
+      return true;
     } catch {
-      /* backend not up yet */
+      return false; // backend not up yet
     }
   };
 
@@ -250,6 +254,7 @@ export default function App() {
         return false;
       }
       setHealth(await responseData(res));
+      setWaking(false);
       return true;
     } catch {
       setHealth(null);
@@ -260,18 +265,28 @@ export default function App() {
   };
 
   useEffect(() => {
-    refreshDocs();
     let cancelled = false;
     let retryTimer;
-    const retryDelays = [0, 3000, 10000, 30000];
+    // The free-tier host sleeps after ~15 idle minutes and takes up to a minute
+    // to come back, so keep retrying rather than showing "offline" on load.
+    const retryDelays = [0, 3000, 8000, 15000, 25000, 40000];
 
     const checkBackend = async (attempt) => {
       const isUp = await refreshHealth();
-      if (!cancelled && !isUp && attempt + 1 < retryDelays.length) {
+      if (isUp) {
+        // Only now is the document list meaningful; fetching it before the
+        // backend woke up was what left the sidebar reading "0 indexed".
+        refreshDocs();
+        return;
+      }
+      if (!cancelled && attempt + 1 < retryDelays.length) {
+        setWaking(true);
         retryTimer = window.setTimeout(
           () => checkBackend(attempt + 1),
           retryDelays[attempt + 1]
         );
+      } else if (!cancelled) {
+        setWaking(false);
       }
     };
 
@@ -301,8 +316,12 @@ export default function App() {
       const data = await responseData(res);
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       setStatus({
-        type: "ok",
-        text: `Indexed “${data.filename}” · ${data.documents_ingested} doc(s)`,
+        type: data.pages_without_text ? "warn" : "ok",
+        text:
+          `Indexed “${data.filename}” · ${data.documents_ingested} page(s)` +
+          (data.pages_without_text
+            ? ` · ${data.pages_without_text} page(s) had no extractable text (scanned?)`
+            : ""),
       });
       refreshDocs();
     } catch (err) {
@@ -390,6 +409,10 @@ export default function App() {
   };
 
   const backendUp = health != null;
+  // The backend answers /api/health even when its configured model has been
+  // retired by the provider, which used to look "connected" but fail on every
+  // question. The startup probe result makes that visible.
+  const llmBroken = backendUp && health.llm_status && health.llm_status !== "ok";
 
   return (
     <div className="layout">
@@ -460,14 +483,26 @@ export default function App() {
             )}
             <button
               type="button"
-              className={`status-pill ${backendUp ? "up" : "down"}`}
+              className={`status-pill ${
+                llmBroken ? "warn" : backendUp ? "up" : "down"
+              }`}
               onClick={refreshHealth}
               disabled={healthChecking}
-              title={backendUp ? "Check backend again" : "Retry backend connection"}
+              title={
+                llmBroken
+                  ? `Model unavailable: ${health.llm_status}`
+                  : backendUp
+                  ? "Check backend again"
+                  : "Retry backend connection"
+              }
             >
               <span className="status-dot" />
-              {healthChecking
+              {waking
+                ? "waking backend…"
+                : healthChecking
                 ? "connecting…"
+                : llmBroken
+                ? `${health.llm_model} unavailable`
                 : backendUp
                 ? `${health.llm_provider} · ${health.llm_model}`
                 : "backend offline · retry"}

@@ -30,8 +30,13 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
 
     # Groq (used when llm_provider == "groq"; free tier at console.groq.com)
+    # Groq retired llama-3.3-70b-versatile; gpt-oss-120b is the current free
+    # general-purpose chat model there (131k context, sub-second first token).
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
+    # gpt-oss models think before answering. "low" keeps the reasoning budget
+    # small, which matters because it is billed against max_tokens.
+    groq_reasoning_effort: str = "low"
 
     # Ollama (used when llm_provider == "ollama")
     ollama_model: str = "llama3.1:8b"

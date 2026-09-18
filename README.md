@@ -35,11 +35,11 @@ output guardrails**.
 | Local embeddings | Hugging Face `sentence-transformers/all-MiniLM-L6-v2` by default |
 | Parent-child retrieval | LangChain `ParentDocumentRetriever` — embed small chunks, return larger parent chunks |
 | Orchestration | LangGraph `StateGraph` with conditional guardrail edges |
-| Hosted generation | Groq `llama-3.3-70b-versatile` |
+| Hosted generation | Groq `openai/gpt-oss-120b` |
 | Other providers | Anthropic, OpenAI, and local Ollama are configurable |
 | Observability | LangSmith traces in project `pr-puzzled-robot-90` |
 | Guardrails | Input injection/size checks, no-context refusal, secret redaction, and grounding checks |
-| Parsing | `pypdf` (PDF), `docx2txt` (Word), `TextLoader` (txt/md) |
+| Parsing | `pymupdf` + `pymupdf4llm` (PDF), `docx2txt` (Word), `TextLoader` (txt/md) |
 | UI persistence | Display name, avatar, theme, and the latest 100 messages in browser `localStorage` |
 
 ### The parent-child algorithm

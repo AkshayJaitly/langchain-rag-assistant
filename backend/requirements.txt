@@ -30,5 +30,8 @@ sentence-transformers==3.3.1
 fastembed==0.5.1; python_version < "3.13"
 
 # Document parsing
-pypdf==5.1.0
+# PyMuPDF replaces pypdf for PDFs: it keeps reading order on multi-column pages
+# and pymupdf4llm emits Markdown, so tables and headings survive ingestion.
+pymupdf==1.26.0
+pymupdf4llm==0.0.17
 docx2txt==0.8

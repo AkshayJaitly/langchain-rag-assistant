@@ -12,6 +12,15 @@ from app.rag.vectorstore import read_manifest
 
 router = APIRouter(prefix="/api")
 
+# Result of the startup LLM probe (see app.main lifespan). "unknown" until the
+# probe runs; anything other than "ok" is the provider error verbatim.
+_llm_status = "unknown"
+
+
+def set_llm_status(status: str) -> None:
+    global _llm_status
+    _llm_status = status
+
 
 class QueryRequest(BaseModel):
     question: str
@@ -35,6 +44,7 @@ class QueryResponse(BaseModel):
 class UploadResponse(BaseModel):
     filename: str
     documents_ingested: int
+    pages_without_text: int = 0
 
 
 @router.get("/health")
@@ -58,6 +68,8 @@ def health() -> dict[str, str]:
         "embedding_model": active_embedding_model,
         "pipeline": settings.pipeline,
         "tracing": "on" if langsmith_enabled(settings) else "off",
+        # "ok" once the configured model has answered a probe at startup.
+        "llm_status": _llm_status,
     }
 
 
@@ -84,11 +96,15 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
 
     path = save_upload(contents, filename, settings.upload_dir)
     try:
-        count = await run_in_threadpool(ingest_file, path, filename)
+        count, skipped = await run_in_threadpool(ingest_file, path, filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return UploadResponse(filename=filename, documents_ingested=count)
+    return UploadResponse(
+        filename=filename,
+        documents_ingested=count,
+        pages_without_text=skipped,
+    )
 
 
 @router.post("/query", response_model=QueryResponse)

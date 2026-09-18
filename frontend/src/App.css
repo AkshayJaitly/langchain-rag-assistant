@@ -140,6 +140,10 @@
   background: rgba(229, 72, 77, 0.18);
   color: #ffc7c5;
 }
+.toast.warn {
+  background: rgba(240, 177, 0, 0.16);
+  color: #ffe6a3;
+}
 
 .section-label {
   display: flex;
@@ -296,6 +300,14 @@
 }
 .status-pill.down .status-dot {
   background: var(--danger);
+}
+/* Backend reachable, but its configured model is not. */
+.status-pill.warn {
+  color: #f0b100;
+}
+.status-pill.warn .status-dot {
+  background: #f0b100;
+  box-shadow: 0 0 0 3px rgba(240, 177, 0, 0.18);
 }
 
 .profile-wrap {
