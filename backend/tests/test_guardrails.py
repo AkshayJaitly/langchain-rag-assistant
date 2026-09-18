@@ -70,3 +70,18 @@ def test_regex_fallback_still_catches_the_obvious_case():
 def test_grounding_flags_an_answer_unrelated_to_the_context():
     docs = [Document(page_content="The agreement covers confidential information.")]
     assert guardrails.is_grounded("Paris hosted the Olympic marathon swimming", docs) is False
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I don't know.",
+        "I don’t know.",          # typographic apostrophe, as models write it
+        "I do not know.",
+        "I couldn’t find that in the documents.",
+    ],
+)
+def test_refusal_is_recognised_whatever_apostrophe_is_used(answer):
+    """A refusal scored as ungrounded gets an 'unsupported' warning appended."""
+    assert guardrails.is_refusal(answer) is True
+    assert guardrails.is_grounded(answer, []) is True

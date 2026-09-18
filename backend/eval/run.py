@@ -26,6 +26,26 @@ from eval.dataset import ATTACKS, BENIGN, GOLDEN
 from eval.metrics import mean_reciprocal_rank, rate, recall_at_k
 
 
+CORPUS_DIR = os.path.join(os.path.dirname(__file__), "corpus")
+
+
+def _ingest_distractors() -> int:
+    from app.config import get_settings as _settings
+    from app.rag.ingest import ingest_file
+    from app.rag.vectorstore import read_manifest
+
+    if not os.path.isdir(CORPUS_DIR):
+        return 0
+    known = {row["filename"] for row in read_manifest()}
+    added = 0
+    for name in sorted(os.listdir(CORPUS_DIR)):
+        if not name.lower().endswith(".pdf") or name in known:
+            continue
+        ingest_file(os.path.join(CORPUS_DIR, name), name, _settings().public_tenant)
+        added += 1
+    return added
+
+
 def _reload_settings() -> None:
     get_settings.cache_clear()
     get_retriever.cache_clear()
@@ -89,6 +109,7 @@ def evaluate_retrieval(k: int = 4) -> dict:
         f"doc_recall@{k}": round(recall_at_k(doc_results, k), 4),
         "doc_mrr": round(mean_reciprocal_rank(doc_results), 4),
         f"page_recall@{k}": round(rate(page_hits), 4),
+        "page_recall@1": round(rate([r == 1.0 for r in page_ranks]), 4),
         "page_mrr": round(sum(page_ranks) / len(page_ranks), 4) if page_ranks else 0.0,
         "median_latency_s": round(sorted(latencies)[len(latencies) // 2], 4),
         "page_misses": page_misses,
@@ -194,7 +215,16 @@ def main() -> int:
         "--min-recall",
         type=float,
         default=None,
-        help="Exit non-zero if recall@k falls below this (used by CI).",
+        help="Exit non-zero if page recall@k falls below this (used by CI).",
+    )
+    parser.add_argument(
+        "--min-mrr",
+        type=float,
+        default=None,
+        help=(
+            "Exit non-zero if page MRR falls below this. Recall@k saturates on "
+            "this corpus, so MRR is the metric with headroom to regress."
+        ),
     )
     parser.add_argument("--json", dest="json_path", default=None)
     args = parser.parse_args()
@@ -202,10 +232,14 @@ def main() -> int:
     if not any([args.retrieval, args.guardrails, args.answers, args.compare]):
         args.retrieval = True
 
-    # The samples are the dataset, so make sure they are indexed.
+    # The bundled samples plus evaluation-only distractors. The distractors
+    # shadow the samples -- same vocabulary and structure, different numbers --
+    # so retrieval has to discriminate instead of matching on topic. They are
+    # never seeded into the running app.
     from app.rag.seed import seed_samples
 
     seed_samples()
+    _ingest_distractors()
 
     report: dict = {}
     if args.retrieval:
@@ -227,6 +261,15 @@ def main() -> int:
             json.dump(report, fh, indent=2)
         print(f"\nwrote {args.json_path}")
 
+    failed = False
+    if args.min_mrr is not None:
+        achieved = report.get("retrieval", {}).get("page_mrr", 0.0)
+        if achieved < args.min_mrr:
+            print(f"\nFAIL: page_mrr {achieved} is below the floor {args.min_mrr}")
+            failed = True
+        else:
+            print(f"\nOK: page_mrr {achieved} >= {args.min_mrr}")
+
     if args.min_recall is not None:
         achieved = report.get("retrieval", {}).get(f"page_recall@{args.k}", 0.0)
         if achieved < args.min_recall:
@@ -234,9 +277,10 @@ def main() -> int:
                 f"\nFAIL: page_recall@{args.k} {achieved} is below the floor "
                 f"{args.min_recall}"
             )
-            return 1
-        print(f"\nOK: page_recall@{args.k} {achieved} >= {args.min_recall}")
-    return 0
+            failed = True
+        else:
+            print(f"OK: page_recall@{args.k} {achieved} >= {args.min_recall}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

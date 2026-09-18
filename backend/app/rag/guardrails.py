@@ -142,6 +142,14 @@ def redact_secrets(text: str) -> tuple[str, bool]:
 # removing its refusal sentences.
 _REFUSAL_MARKERS = ("don't know", "do not know", "cannot find", "couldn't find")
 _SENTENCE_RE = re.compile(r"[^.!?\n]+[.!?]*")
+# Models write "I don't know" with a typographic apostrophe. Matching only the
+# ASCII form made every such refusal look ungrounded, which appended an
+# "unsupported" warning to answers that were behaving exactly as intended.
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u02bc": "'", "\u00b4": "'"})
+
+
+def _fold(text: str) -> str:
+    return (text or "").translate(_APOSTROPHES).lower()
 
 
 def is_refusal(answer: str) -> bool:
@@ -152,11 +160,9 @@ def is_refusal(answer: str) -> bool:
     remainder = [
         s
         for s in sentences
-        if not any(m in s.lower() for m in _REFUSAL_MARKERS) and s.strip()
+        if not any(m in _fold(s) for m in _REFUSAL_MARKERS) and s.strip()
     ]
-    return not remainder and any(
-        m in (answer or "").lower() for m in _REFUSAL_MARKERS
-    )
+    return not remainder and any(m in _fold(answer) for m in _REFUSAL_MARKERS)
 
 
 def is_grounded(answer: str, documents) -> bool:

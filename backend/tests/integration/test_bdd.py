@@ -48,12 +48,14 @@ def no_documents(client):
     assert client.get("/api/documents").json()["documents"] == []
 
 
+def apiheaders():
+    return {"X-Tenant-Id": "tester"}
+
+
 @when(parsers.parse('I ask "{question}"'))
 def i_ask(client, context, question):
     context["response"] = client.post(
-        "/api/query",
-        json={"question": question},
-        headers={"X-Tenant-Id": "tester"},
+        "/api/query", json={"question": question}, headers=apiheaders()
     )
 
 
@@ -61,6 +63,17 @@ def i_ask(client, context, question):
 def visitor_asks(client, context, tenant, question):
     context["response"] = client.post(
         "/api/query", json={"question": question}, headers={"X-Tenant-Id": tenant}
+    )
+
+
+@when(parsers.parse('I ask "{question}" with history:'))
+def i_ask_with_history(client, context, question, datatable):
+    header, *rows = datatable
+    history = [dict(zip(header, row)) for row in rows]
+    context["response"] = client.post(
+        "/api/query",
+        json={"question": question, "history": history},
+        headers=apiheaders(),
     )
 
 
@@ -116,6 +129,16 @@ def excluded(context):
 def not_listed(context, name):
     names = [d["filename"] for d in context["response"].json()["documents"]]
     assert name not in names
+
+
+@then("the question was not rewritten")
+def not_rewritten(context):
+    assert context["response"].json()["standalone_question"] is None
+
+
+@then("the request is rejected as invalid")
+def rejected_invalid(context):
+    assert context["response"].status_code == 422
 
 
 @then(parsers.parse('no source from "{name}" is cited'))

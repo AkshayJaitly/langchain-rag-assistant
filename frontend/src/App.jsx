@@ -18,8 +18,10 @@ const DEFAULT_AVATARS = Array.from(
 // one is deliberately unanswerable: it shows the grounding guardrail refusing
 // rather than inventing an answer.
 // Turns sent back as context for follow-up resolution. Matches HISTORY_TURNS
-// on the backend.
+// and HISTORY_MAX_CHARS on the backend, which rejects anything longer rather
+// than truncating it -- so trim here, or a long answer 422s the next question.
 const HISTORY_TURNS = 6;
+const HISTORY_MAX_CHARS = 4000;
 
 const EXAMPLES = [
   "What's the service credit if uptime drops to 97%?",
@@ -392,7 +394,10 @@ export default function App() {
       const history = messages
         .filter((m) => !m.error)
         .slice(-HISTORY_TURNS)
-        .map((m) => ({ role: m.role, content: m.content }));
+        .map((m) => ({
+          role: m.role,
+          content: String(m.content).slice(0, HISTORY_MAX_CHARS),
+        }));
 
       const res = await fetch(`${API}/api/query`, {
         method: "POST",

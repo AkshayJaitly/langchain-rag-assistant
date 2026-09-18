@@ -32,27 +32,41 @@ class Case:
 
 
 GOLDEN: list[Case] = [
-    # --- table lookups: the extraction work is what makes these possible ---
-    Case("What is the service credit if uptime drops to 97%?", "acme-msa.pdf", ["25"], expects_pages=frozenset([1])),
-    Case("What is the service credit if uptime falls below 95%?", "acme-msa.pdf", ["50"], expects_pages=frozenset([1])),
+    # --- table lookups, now against a competing agreement with its own table ---
+    Case("Under the Acme agreement, what is the service credit if uptime drops to 97%?", "acme-msa.pdf", ["25"], expects_pages=frozenset([1])),
+    Case("Under the Acme agreement, what is the service credit below 95% uptime?", "acme-msa.pdf", ["50"], expects_pages=frozenset([1])),
+    Case("What is Zenith's service credit if uptime drops to 97%?", "zenith-msa.pdf", ["15"], expects_pages=frozenset([1])),
     Case("What was EMEA revenue in Q3 2026?", "helios-q3-metrics.pdf", ["2.61"], expects_pages=frozenset([0])),
-    Case("What was net revenue retention in Q3?", "helios-q3-metrics.pdf", ["114"], expects_pages=frozenset([0, 1])),
+    Case("What was EMEA revenue in Q2 2026?", "helios-q2-metrics.pdf", ["2.05"], expects_pages=frozenset([0])),
+    Case("What was net revenue retention in Q3 2026?", "helios-q3-metrics.pdf", ["114"], expects_pages=frozenset([0, 1])),
+
     # --- rare literal tokens: the case BM25 exists for ---
-    Case("What is the annual platform fee?", "acme-msa.pdf", ["148,000", "148000"], expects_pages=frozenset([0])),
-    Case("What are the payment terms?", "acme-msa.pdf", ["45", "forty-five"], expects_pages=frozenset([0])),
-    Case("What is the Severity 1 response time?", "acme-msa.pdf", ["30"], expects_pages=frozenset([1])),
-    # --- policy prose ---
+    Case("What is the annual platform fee under the Acme agreement?", "acme-msa.pdf", ["148,000", "148000"], expects_pages=frozenset([0])),
+    Case("What is Zenith's annual platform fee?", "zenith-msa.pdf", ["96,500", "96500"], expects_pages=frozenset([0])),
+    Case("What are Acme's payment terms?", "acme-msa.pdf", ["45", "forty-five"], expects_pages=frozenset([0])),
+    Case("What is the Severity 1 response time under the Acme agreement?", "acme-msa.pdf", ["30"], expects_pages=frozenset([1])),
+    Case("What is Zenith's Severity 1 response time?", "zenith-msa.pdf", ["60"], expects_pages=frozenset([1])),
+
+    # --- policy prose, shadowed by a second Northwind policy ---
     Case("How many office days per month are required?", "northwind-remote-policy.pdf", ["eight", "8"], expects_pages=frozenset([1])),
     Case("What is the home-office stipend?", "northwind-remote-policy.pdf", ["1,200", "1200"], expects_pages=frozenset([1])),
     Case("How long can I work from another country?", "northwind-remote-policy.pdf", ["30", "thirty"], expects_pages=frozenset([1])),
-    Case("What is the connectivity allowance?", "northwind-remote-policy.pdf", ["60"], expects_pages=frozenset([1])),
-    Case("Which law governs the agreement?", "acme-msa.pdf", ["Delaware"], expects_pages=frozenset([2])),
-    Case("How long are backups retained?", "acme-msa.pdf", ["35", "thirty-five"], expects_pages=frozenset([2])),
-    Case("What was cloud infrastructure spend as a share of revenue?", "helios-q3-metrics.pdf", ["14"], expects_pages=frozenset([2])),
+    Case("What is the monthly connectivity allowance?", "northwind-remote-policy.pdf", ["60"], expects_pages=frozenset([1])),
+    Case("What is the daily meal allowance for international travel?", "northwind-expense-policy.pdf", ["95"], expects_pages=frozenset([1])),
+    Case("What is the hotel rate cap in Tier 1 cities?", "northwind-expense-policy.pdf", ["260"], expects_pages=frozenset([1])),
+
+    # --- paraphrases: no shared keywords with the source wording ---
+    Case("Which state's law governs the Acme contract?", "acme-msa.pdf", ["Delaware"], expects_pages=frozenset([2])),
+    Case("How long does Acme keep backup copies?", "acme-msa.pdf", ["35", "thirty-five"], expects_pages=frozenset([2])),
+    Case("What share of revenue went on cloud infrastructure in Q3?", "helios-q3-metrics.pdf", ["14"], expects_pages=frozenset([2])),
+    Case("How much notice must be given to stop the Acme contract renewing?", "acme-msa.pdf", ["60", "sixty"], expects_pages=frozenset([0])),
+    Case("Who has to approve a 6000 dollar expense?", "northwind-expense-policy.pdf", ["director"], expects_pages=frozenset([0])),
+
     # --- must be refused: not in the corpus ---
     Case("What is the parental leave entitlement?", None, [], answerable=False),
     Case("What is the 2027 headcount plan?", None, [], answerable=False),
     Case("Who is the CEO of Acme?", None, [], answerable=False),
+    Case("What is Zenith's parental leave policy?", None, [], answerable=False),
 ]
 
 # Spec 006 AC-3. Attacks that the old regex list let through are deliberately

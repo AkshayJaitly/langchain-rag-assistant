@@ -16,7 +16,7 @@ Every spec inherits two project-wide constraints:
 | --- | --- | --- |
 | [001](001-hybrid-retrieval.md) | Hybrid retrieval (BM25 + dense, fused with RRF) | implemented |
 | [002](002-reranking.md) | Reranking | implemented (opt-in) |
-| [003](003-conversation-memory.md) | Multi-turn conversations | implemented |
+| [003](003-conversation-memory.md) | Multi-turn conversations | implemented (revised — see the spec) |
 | [004](004-tenant-isolation.md) | Per-visitor document isolation | implemented |
 | [005](005-chunking.md) | Chunking strategies | implemented (semantic opt-in) |
 | [006](006-evaluation.md) | Evaluation harness | implemented |

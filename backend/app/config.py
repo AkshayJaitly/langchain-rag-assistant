@@ -95,8 +95,10 @@ class Settings(BaseSettings):
     chunking: str = "recursive"
     semantic_breakpoint_percentile: int = 90
 
-    # Conversation memory (spec 003). In-process only; lost on restart.
+    # Conversation memory (spec 003). History is supplied by the caller, so it
+    # is untrusted input and gets validated and bounded server-side.
     history_turns: int = 6
+    history_max_chars: int = 4000
 
     # Tenancy (spec 004). Isolation between visitors, not authentication.
     public_tenant: str = "public"

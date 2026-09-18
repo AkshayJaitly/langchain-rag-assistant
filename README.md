@@ -332,19 +332,41 @@ python -m eval.run --answers              # needs a generation provider
 python -m eval.run --compare hybrid       # hybrid on vs off
 ```
 
-Document-level recall saturates on a three-document corpus — every question is
-trivially attributable — so the discriminating metric is **page level**:
+The evaluation corpus is deliberately harder than the demo corpus. Alongside the
+three bundled samples it ingests three **distractor** documents from
+`eval/corpus/` — a competing service agreement with its own uptime-credit table,
+the previous quarter's metrics, and a second Northwind policy. Same vocabulary,
+same structure, different numbers. They are never seeded into the running app.
+Without them every question is trivially attributable and every metric pins at
+1.00, which measures nothing.
 
-| Configuration | page recall@4 | page MRR | median latency |
-| --- | --- | --- | --- |
-| Hybrid (BM25 + dense) | 1.00 | 0.964 | 12 ms |
-| Dense only | 1.00 | 0.929 | 6 ms |
+With the distractors in place, and scoring at page level:
 
-Hybrid ranks the right page higher, and that is the whole of the measured gain.
-It is a small effect on a small corpus, and it is reported rather than assumed —
-which is the point of having the harness. Retrieval metrics are deterministic
-and gate CI with a recall floor; answer quality needs a judge and stays a
-manual run.
+| Configuration | page recall@4 | page recall@1 | page MRR | median latency |
+| --- | --- | --- | --- | --- |
+| Hybrid (BM25 + dense) | 1.00 | 0.77 | **0.879** | 11 ms |
+| Dense only | 1.00 | 0.50 | **0.731** | 6 ms |
+
+Hybrid retrieval is worth about 20% relative MRR here, and it puts the right
+page first 77% of the time against 50% for dense alone. On the easy corpus the
+same comparison read 0.964 vs 0.929 — close enough to be noise. The harder set
+is what made the difference legible.
+
+Recall@4 still saturates, so **CI gates on MRR**, which is the metric with room
+to regress. Answer quality (`--answers`) needs a judge and stays a manual run;
+it currently reports 1.00 answer match and 1.00 refusal accuracy.
+
+### What the harness has caught
+
+Both of these were live bugs, found by running the evaluation rather than by
+reading the code:
+
+- Genuine refusals were being scored ungrounded, because models write
+  "I don’t know" with a typographic apostrophe and the refusal markers only
+  matched the ASCII form. Every correct refusal got an "answer may not be fully
+  supported" warning appended to it.
+- Retrieval quality claims about hybrid search were unfalsifiable until the
+  corpus was hard enough to separate the configurations.
 
 ## Tests
 
@@ -508,8 +530,18 @@ LLM_PROVIDER=ollama
 OLLAMA_MODEL=llama3.1:8b
 ```
 
-## Working Site Preview(local)
-<img width="1144" height="622" alt="Screenshot 2026-07-29 at 1 18 37 PM" src="https://github.com/user-attachments/assets/bb4149fc-cd67-40a4-9b64-d4f944fbdc3f" />
+## What it looks like
+
+A fresh backend seeds itself with the three sample documents, so there is
+always something to ask about:
+
+![The app with the bundled sample documents indexed](docs/images/app-empty-state.png)
+
+A follow-up is resolved against the conversation before retrieval. Here "and if
+it goes below that?" is rewritten into a standalone question — shown above the
+answer as *interpreted as* — and answered from the service-credit table:
+
+![A follow-up question resolved into a standalone question and answered with a citation](docs/images/app-multi-turn.png)
 
 ## Langsmith dash
 
@@ -518,9 +550,16 @@ OLLAMA_MODEL=llama3.1:8b
 
 ## Notes
 
-- Embeddings run locally, so re-indexing and retrieval cost nothing.
-- Guardrails here are intentionally lightweight/heuristic — for production,
-  consider a dedicated moderation model and a stricter faithfulness grader.
-- The current browser history is presentation persistence, not LangGraph
-  conversational memory. Server-side threads require a LangGraph checkpointer
-  and authenticated storage.
+- Embeddings run inside the backend process, so indexing and retrieval cost
+  nothing and no document text is sent to an embedding API.
+- Guardrails are no longer heuristic: questions and ingested documents are both
+  classified by Prompt Guard 2, with the old regex list kept only as a fallback
+  for when the classifier cannot be reached. The part that *is* still a
+  heuristic is the grounding check — see
+  [What the grounding check does not do](#what-the-grounding-check-does-not-do).
+- Conversation history is supplied by the browser on each request and is used to
+  condense follow-ups before retrieval. There are no server-side threads;
+  [spec 003](specs/003-conversation-memory.md) explains why that is the right
+  trade on a host that sleeps, and what it costs.
+- Documents are scoped per visitor, which is isolation and not authentication.
+  Nothing verifies the tenant header.

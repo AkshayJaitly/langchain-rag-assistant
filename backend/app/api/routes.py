@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings, langsmith_enabled
@@ -22,9 +22,31 @@ def set_llm_status(status: str) -> None:
     _llm_status = status
 
 
+# Spec 003 AC-8: history arrives from the caller, so it is untrusted input.
+# Anything outside this set is a client bug or an attempt to shape the prompt.
+VALID_ROLES = {"user", "assistant"}
+
+
 class Turn(BaseModel):
     role: str
     content: str
+
+    @field_validator("role")
+    @classmethod
+    def known_role(cls, value: str) -> str:
+        if value not in VALID_ROLES:
+            raise ValueError(f"role must be one of {sorted(VALID_ROLES)}")
+        return value
+
+    @field_validator("content")
+    @classmethod
+    def bounded_content(cls, value: str) -> str:
+        limit = get_settings().history_max_chars
+        if len(value) > limit:
+            # AC-9: reject rather than silently truncating, so the caller is
+            # never told a turn was used when it was quietly cut in half.
+            raise ValueError(f"turn content exceeds {limit} characters")
+        return value
 
 
 class QueryRequest(BaseModel):

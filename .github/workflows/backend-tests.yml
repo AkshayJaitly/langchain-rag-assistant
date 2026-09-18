@@ -46,7 +46,12 @@ jobs:
           CHROMA_DIR: /tmp/eval/chroma
           DOCSTORE_DIR: /tmp/eval/docstore
           UPLOAD_DIR: /tmp/eval/uploads
-        run: python -m eval.run --retrieval --min-recall 0.9 --json /tmp/eval-report.json
+        # Recall@4 saturates on this corpus, so MRR is the gate with headroom:
+        # it is what actually moves when retrieval regresses.
+        run: >-
+          python -m eval.run --retrieval
+          --min-recall 0.9 --min-mrr 0.80
+          --json /tmp/eval-report.json
 
       - name: Upload evaluation report
         if: always()
