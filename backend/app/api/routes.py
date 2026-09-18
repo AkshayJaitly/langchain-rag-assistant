@@ -102,6 +102,7 @@ def health() -> dict[str, str]:
     active_model = {
         "ollama": settings.ollama_model,
         "openai": settings.openai_model,
+        "gemini": settings.gemini_model,
         "groq": settings.groq_model,
     }.get(settings.llm_provider.lower(), settings.llm_model)
     active_embedding_model = (

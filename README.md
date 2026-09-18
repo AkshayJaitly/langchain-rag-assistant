@@ -66,7 +66,7 @@ API), and the automated suites never call a network service.
 | Isolation | Per-visitor tenant scoping ([spec 004](specs/004-tenant-isolation.md)) |
 | Evaluation | Golden dataset, retrieval metrics gate CI ([spec 006](specs/006-evaluation.md)) |
 | Orchestration | LangGraph `StateGraph` with conditional guardrail edges |
-| Hosted generation | Groq `openai/gpt-oss-120b` |
+| Hosted generation | Groq `openai/gpt-oss-120b` (Gemini and Claude are one env var away) |
 | Other providers | Anthropic, OpenAI, and local Ollama are configurable |
 | Observability | LangSmith traces in project `pr-puzzled-robot-90` |
 | Guardrails | Prompt Guard 2 classifier on questions *and* ingested documents, no-context refusal, secret/PII redaction, grounding checks |
@@ -330,7 +330,13 @@ python -m eval.run --retrieval            # embeddings only, no provider call
 python -m eval.run --guardrails           # needs GROQ_API_KEY
 python -m eval.run --answers              # needs a generation provider
 python -m eval.run --compare hybrid       # hybrid on vs off
+python -m eval.run --compare provider --answers   # Groq vs Gemini, same dataset
 ```
+
+Because generation sits behind a provider abstraction, swapping models is an
+env var rather than a code change — and `--compare provider` scores them on the
+same golden dataset instead of on impressions. A provider with no key
+configured is reported as skipped rather than aborting the run.
 
 The evaluation corpus is deliberately harder than the demo corpus. Alongside the
 three bundled samples it ingests three **distractor** documents from
@@ -491,6 +497,7 @@ Set `LLM_PROVIDER` in `backend/.env`:
 | -------------- | --------- | --------------------------------------------------------------- |
 | `anthropic`    | paid API  | Set `ANTHROPIC_API_KEY`; pick `LLM_MODEL` (`claude-haiku-4-5` = cheapest, `claude-sonnet-5` = balanced, `claude-opus-5` = best). |
 | `openai`       | paid API  | Set `OPENAI_API_KEY`; pick `OPENAI_MODEL` (default `gpt-4o-mini`). |
+| `gemini`       | **free**  | Free key from [aistudio.google.com](https://aistudio.google.com) — no Google Cloud project or billing account needed. Set `GOOGLE_API_KEY`; pick `GEMINI_MODEL` (default `gemini-3.6-flash`; the 3.x Flash line is on the free tier). |
 | `groq`         | **free**  | Free key at [console.groq.com](https://console.groq.com); set `GROQ_API_KEY` and `GROQ_MODEL` (default `openai/gpt-oss-120b`). Ideal for a $0 always-on deploy. Groq retires models regularly — check `GET /api/models` on their API if `health.llm_status` reports `model_not_found`. |
 | `ollama`       | **free**  | Install [Ollama](https://ollama.com), run `ollama pull llama3.1:8b`, set `OLLAMA_MODEL`. No API key; local only (won't fit free cloud tiers). |
 

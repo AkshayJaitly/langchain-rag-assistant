@@ -107,6 +107,16 @@ def _get_llm() -> BaseChatModel:
             **extra,
         )
 
+    if provider == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            model=settings.gemini_model,
+            google_api_key=settings.google_api_key,
+            max_output_tokens=settings.llm_max_tokens,
+            temperature=0,
+        )
+
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
@@ -118,7 +128,7 @@ def _get_llm() -> BaseChatModel:
 
     raise ValueError(
         f"Unknown LLM_PROVIDER '{settings.llm_provider}'. "
-        "Use 'anthropic', 'openai', 'groq', or 'ollama'."
+        "Use 'anthropic', 'openai', 'gemini', 'groq', or 'ollama'."
     )
 
 

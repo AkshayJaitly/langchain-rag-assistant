@@ -47,8 +47,11 @@ def _ingest_distractors() -> int:
 
 
 def _reload_settings() -> None:
+    from app.rag.graph import _get_llm
+
     get_settings.cache_clear()
     get_retriever.cache_clear()
+    _get_llm.cache_clear()
     invalidate_caches()
 
 
@@ -172,11 +175,20 @@ CONFIGURATIONS = {
                ("rerank on", {"RERANK": "true"})],
     "pipeline": [("simple", {"PIPELINE": "simple"}),
                  ("multi_agent", {"PIPELINE": "multi_agent"})],
+    # Generation provider. Only meaningful with --answers, since retrieval does
+    # not touch the LLM. Each provider needs its own key configured.
+    "provider": [("groq", {"LLM_PROVIDER": "groq"}),
+                 ("gemini", {"LLM_PROVIDER": "gemini"})],
 }
 
 
 def compare(dimension: str, with_answers: bool) -> dict:
     """Run a metric across configurations (AC-5)."""
+    if dimension == "provider" and not with_answers:
+        raise SystemExit(
+            "--compare provider only measures generation, so pass --answers too."
+        )
+
     out = {}
     for label, env in CONFIGURATIONS[dimension]:
         previous = {k: os.environ.get(k) for k in env}
@@ -186,6 +198,10 @@ def compare(dimension: str, with_answers: bool) -> dict:
             out[label] = (
                 evaluate_answers() if with_answers else evaluate_retrieval()
             )
+        except Exception as exc:  # noqa: BLE001 - a missing key must not abort
+            # A provider with no key configured is skipped, not fatal: the
+            # point of the comparison is whichever providers are available.
+            out[label] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
         finally:
             for key, value in previous.items():
                 if value is None:

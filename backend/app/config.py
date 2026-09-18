@@ -12,8 +12,8 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    # LLM provider: "anthropic" (Claude), "openai" (GPT), "groq" (free/fast
-    # hosted Llama), or "ollama" (local/free)
+    # LLM provider: "anthropic" (Claude), "openai" (GPT), "gemini" (Google AI
+    # Studio, free tier), "groq" (free/fast hosted), or "ollama" (local/free)
     llm_provider: str = "anthropic"
     llm_max_tokens: int = 2048
 
@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     # gpt-oss models think before answering. "low" keeps the reasoning budget
     # small, which matters because it is billed against max_tokens.
     groq_reasoning_effort: str = "low"
+
+    # Gemini (used when llm_provider == "gemini"). A free key from
+    # https://aistudio.google.com works; no Google Cloud project or billing
+    # account is required. The 3.x Flash line is on the free tier; if a model
+    # is retired or unavailable on your key, the startup probe reports it as
+    # health.llm_status rather than failing on the first question.
+    google_api_key: str = ""
+    gemini_model: str = "gemini-3.6-flash"
 
     # Ollama (used when llm_provider == "ollama")
     ollama_model: str = "llama3.1:8b"

@@ -26,3 +26,32 @@ def test_unknown_strategy_fails_fast(monkeypatch):
     get_settings.cache_clear()
     with pytest.raises(ValueError, match="Unknown CHUNKING"):
         get_settings().chunking_strategy
+
+
+def test_gemini_provider_is_selectable(monkeypatch):
+    """Spec: the provider abstraction must cover Gemini without code changes."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    from app.rag.graph import _get_llm
+
+    _get_llm.cache_clear()
+    try:
+        assert type(_get_llm()).__name__ == "ChatGoogleGenerativeAI"
+    finally:
+        _get_llm.cache_clear()
+
+
+def test_unknown_provider_names_the_valid_options(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "bedrock")
+    get_settings.cache_clear()
+
+    from app.rag.graph import _get_llm
+
+    _get_llm.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="gemini"):
+            _get_llm()
+    finally:
+        _get_llm.cache_clear()
