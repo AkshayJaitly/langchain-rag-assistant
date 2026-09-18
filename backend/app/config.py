@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     child_chunk_size: int = 400
     child_chunk_overlap: int = 50
 
+    # Prompt-injection classifier (Meta's Prompt Guard 2, served free by Groq).
+    # It returns P(injection); anything above the threshold is treated as an
+    # attack. Needs GROQ_API_KEY -- without one the regex heuristics are used.
+    guard_model: str = "meta-llama/llama-prompt-guard-2-86m"
+    guard_threshold: float = 0.5
+    guard_enabled: bool = True
+
     # Number of source pages embedded per add_documents call. Ingestion peaks at
     # roughly one batch of child chunks, not the whole document.
     ingest_batch_size: int = 1

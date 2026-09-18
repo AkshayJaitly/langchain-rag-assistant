@@ -8,8 +8,9 @@ from langchain_community.document_loaders import Docx2txtLoader, TextLoader
 from langchain_core.documents import Document
 
 from app.config import get_settings
+from app.rag import guardrails
 from app.rag.pdf import extract_pages
-from app.rag.vectorstore import get_retriever, record_ingested
+from app.rag.vectorstore import get_retriever, record_ingested, remove_document
 
 SUPPORTED_EXTENSIONS = {"pdf", "docx", "doc", "txt", "md"}
 
@@ -66,10 +67,10 @@ def load_document(path: str, filename: str) -> list[Document]:
     return docs
 
 
-def ingest_file(path: str, filename: str) -> tuple[int, int]:
+def ingest_file(path: str, filename: str) -> tuple[int, int, int]:
     """Load a file, split it into parent/child chunks, embed and store it.
 
-    Returns (documents ingested, pages that yielded no text).
+    Returns (documents ingested, pages with no text, pages flagged as injection).
     """
     ext = _extension(filename)
     if ext not in SUPPORTED_EXTENSIONS:
@@ -82,6 +83,21 @@ def ingest_file(path: str, filename: str) -> tuple[int, int]:
     if not docs or not any(d.page_content.strip() for d in docs):
         raise ValueError("No extractable text found in the document.")
 
+    # Screen the document itself. Guarding only the question leaves indirect
+    # prompt injection wide open: text inside an uploaded PDF reaches the model
+    # through the retrieved context without ever passing an input guardrail.
+    # Scoring here costs one classifier call per page at upload instead of one
+    # per question, and the verdict rides along in the chunk's metadata.
+    suspicious = 0
+    for doc in docs:
+        flagged, score = guardrails.looks_like_injection(doc.page_content)
+        doc.metadata["injection_score"] = round(score, 4) if score is not None else None
+        doc.metadata["suspect_injection"] = flagged
+        suspicious += int(flagged)
+
+    # Re-uploading replaces the previous copy instead of adding a second one.
+    remove_document(filename)
+
     retriever = get_retriever()
     # ParentDocumentRetriever handles parent+child splitting and embedding, but
     # it embeds every child of everything it is handed in a single call. On a
@@ -93,8 +109,8 @@ def ingest_file(path: str, filename: str) -> tuple[int, int]:
         gc.collect()
 
     skipped = docs[0].metadata.get("pages_without_text", 0)
-    record_ingested(filename, len(docs))
-    return len(docs), skipped
+    record_ingested(filename, len(docs), suspicious)
+    return len(docs), skipped, suspicious
 
 
 def save_upload(tmp_bytes: bytes, filename: str, upload_dir: str) -> str:

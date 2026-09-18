@@ -466,6 +466,9 @@
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
+  /* Six chips need a bound, or they stretch into one thin line on a wide screen. */
+  max-width: 640px;
+  margin: 0 auto;
 }
 .example {
   background: var(--surface);

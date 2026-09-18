@@ -15,6 +15,7 @@ from app.config import configure_langsmith, get_settings
 from app.api.routes import set_llm_status
 from app.rag.embeddings import get_embeddings
 from app.rag.graph import probe_llm
+from app.rag.seed import seed_samples
 
 settings = get_settings()
 
@@ -28,6 +29,12 @@ async def lifespan(_: FastAPI):
     # so the first user upload does not pay model initialization time.
     if settings.embedding_backend.lower() == "fastembed":
         get_embeddings()
+
+    # Give a fresh instance something to answer; the hosted disk is ephemeral.
+    try:
+        seed_samples()
+    except Exception:  # noqa: BLE001 - never block startup on the demo corpus
+        logging.getLogger("rag").exception("Sample seeding failed")
 
     status = probe_llm()
     set_llm_status(status)

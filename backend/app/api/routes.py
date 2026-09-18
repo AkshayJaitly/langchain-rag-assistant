@@ -45,6 +45,7 @@ class UploadResponse(BaseModel):
     filename: str
     documents_ingested: int
     pages_without_text: int = 0
+    suspect_injection_pages: int = 0
 
 
 @router.get("/health")
@@ -101,7 +102,9 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
 
     path = save_upload(contents, filename, settings.upload_dir)
     try:
-        count, skipped = await run_in_threadpool(ingest_file, path, filename)
+        count, skipped, suspicious = await run_in_threadpool(
+            ingest_file, path, filename
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -109,6 +112,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
         filename=filename,
         documents_ingested=count,
         pages_without_text=skipped,
+        suspect_injection_pages=suspicious,
     )
 
 

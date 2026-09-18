@@ -1,0 +1,2 @@
+# Test-only dependencies. The suite runs offline; see tests/conftest.py.
+pytest==8.3.4

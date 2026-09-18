@@ -53,6 +53,16 @@ def _normalize(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _has_content(text: str) -> bool:
+    """True when a page holds real text, not just layout furniture.
+
+    pymupdf4llm renders an empty page as a Markdown horizontal rule ("-----"),
+    which is truthy but carries nothing. Counting that as text would let a
+    scanned PDF index a page of separators instead of failing.
+    """
+    return any(ch.isalnum() for ch in text)
+
+
 def _drop_repeated_lines(pages: list[str]) -> list[str]:
     """Remove running heads/feet that repeat at the edges of most pages."""
     if len(pages) < _REPEAT_LINE_MIN_PAGES:
@@ -105,5 +115,5 @@ def extract_pages(path: str) -> tuple[list[Page], int]:
     ]
     merged = [_normalize(text) for text in _drop_repeated_lines(merged)]
 
-    pages = [Page(number=i, text=t) for i, t in enumerate(merged) if t]
+    pages = [Page(number=i, text=t) for i, t in enumerate(merged) if _has_content(t)]
     return pages, len(merged) - len(pages)

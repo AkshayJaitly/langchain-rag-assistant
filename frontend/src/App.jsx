@@ -12,10 +12,17 @@ const DEFAULT_AVATARS = Array.from(
   (_, index) => `${import.meta.env.BASE_URL}avatars/avatar-${index + 1}.png`
 );
 
+// Written against the bundled sample documents (service agreement, remote-work
+// policy, quarterly metrics), which a fresh backend seeds itself with. The last
+// one is deliberately unanswerable: it shows the grounding guardrail refusing
+// rather than inventing an answer.
 const EXAMPLES = [
-  "Summarize the key points",
-  "What are the main terms?",
-  "What isn't covered?",
+  "What's the service credit if uptime drops to 97%?",
+  "How many office days per month are required?",
+  "What drove revenue growth in Q3?",
+  "What are the payment terms and late fees?",
+  "Summarize the key terms across these documents",
+  "What do these documents say about headcount in 2027?",
 ];
 
 function loadStored(key, fallback) {

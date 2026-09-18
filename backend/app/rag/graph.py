@@ -200,7 +200,20 @@ def _dedupe(documents: list[Document]) -> list[Document]:
 def retrieve_node(state: RAGState) -> RAGState:
     retriever = get_retriever()
     docs = _dedupe(retriever.invoke(state["question"]))
-    return {"documents": docs[: get_settings().retrieval_k]}
+
+    # Passages the ingest-time classifier flagged never reach the prompt. This
+    # is the indirect-injection path: instructions hidden in an uploaded PDF
+    # would otherwise be handed to the model as trusted context.
+    triggered = list(state.get("guardrails", []))
+    kept = [d for d in docs if not d.metadata.get("suspect_injection")]
+    excluded = len(docs) - len(kept)
+    if excluded:
+        triggered.append(f"context:{excluded} suspicious passage(s) excluded")
+
+    return {
+        "documents": kept[: get_settings().retrieval_k],
+        "guardrails": triggered,
+    }
 
 
 def no_context_node(state: RAGState) -> RAGState:

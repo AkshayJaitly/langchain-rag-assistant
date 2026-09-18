@@ -43,12 +43,42 @@ def read_manifest() -> list[dict]:
         return json.load(fh)
 
 
-def record_ingested(filename: str, chunks: int) -> None:
-    manifest = read_manifest()
-    manifest.append({"filename": filename, "chunks": chunks})
+def record_ingested(filename: str, chunks: int, suspicious: int = 0) -> None:
+    """Record an ingested document, replacing any earlier entry of the name."""
+    manifest = [d for d in read_manifest() if d.get("filename") != filename]
+    entry = {"filename": filename, "chunks": chunks}
+    if suspicious:
+        entry["suspect_injection_pages"] = suspicious
+    manifest.append(entry)
     os.makedirs(os.path.dirname(_manifest_path()), exist_ok=True)
     with open(_manifest_path(), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2)
+
+
+def remove_document(filename: str) -> int:
+    """Drop a document's existing chunks. Returns the number of children removed.
+
+    Re-uploading a file used to embed a second copy of every chunk, so the same
+    passage came back twice in retrieval and the sidebar listed the document
+    twice. Clearing first makes re-upload a replace rather than an append.
+    """
+    retriever = get_retriever()
+    collection = retriever.vectorstore.get(where={"source": filename})
+    ids = collection.get("ids") or []
+    if not ids:
+        return 0
+
+    # Children carry the key of the parent chunk they were split from; drop
+    # those parents too so the docstore does not accumulate orphans.
+    parent_ids = {
+        meta.get(retriever.id_key)
+        for meta in (collection.get("metadatas") or [])
+        if meta and meta.get(retriever.id_key)
+    }
+    retriever.vectorstore.delete(ids=ids)
+    if parent_ids:
+        retriever.docstore.mdelete(list(parent_ids))
+    return len(ids)
 
 
 @lru_cache
