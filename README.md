@@ -11,33 +11,31 @@ output guardrails**.
 **Backend health:** [langchain-rag-assistant-tw27.onrender.com/api/health](https://langchain-rag-assistant-tw27.onrender.com/api/health)
 
 ```mermaid
-flowchart LR
-    subgraph Browser["GitHub Pages"]
-        UI["React + Vite<br/>chat · doc list · local profile"]
+flowchart TB
+    UI["React · Vite<br/><i>GitHub Pages</i>"]
+
+    subgraph BE["FastAPI · Render free tier (512 MB)"]
+        direction TB
+        ING["<b>Ingest</b><br/>PyMuPDF → parent/child chunks<br/>FastEmbed ONNX"]
+        RAG["<b>Answer</b><br/>LangGraph: guardrails → retrieve → generate"]
+        CH[("Chroma<br/>child vectors")]
+        DS[("Docstore<br/>parent chunks")]
     end
 
-    subgraph Render["Render (free tier, 512 MB)"]
-        API["FastAPI"]
-        ING["Ingestion<br/>PyMuPDF → parent/child chunks"]
-        GRAPH["LangGraph pipeline<br/>guardrails · retrieve · generate"]
-        CHROMA[("Chroma<br/>child vectors")]
-        STORE[("File docstore<br/>parent chunks")]
-    end
+    LLM["Groq<br/>openai/gpt-oss-120b"]
 
-    GROQ["Groq<br/>openai/gpt-oss-120b"]
-    LS["LangSmith<br/>traces"]
+    UI -- "upload" --> ING
+    UI -- "query" --> RAG
+    ING --> CH
+    ING --> DS
+    RAG --> CH
+    RAG --> DS
+    RAG --> LLM
 
-    UI -- "POST /api/upload" --> API
-    UI -- "POST /api/query" --> API
-    UI -- "GET /api/health · /api/documents" --> API
-    API --> ING
-    API --> GRAPH
-    ING -- "embed children<br/>FastEmbed ONNX" --> CHROMA
-    ING --> STORE
-    GRAPH -- "search children" --> CHROMA
-    GRAPH -- "fetch parents" --> STORE
-    GRAPH --> GROQ
-    GRAPH -.-> LS
+    classDef store fill:#eef4ff,stroke:#5b7db1
+    classDef ext fill:#f3f0ff,stroke:#7c6bb1
+    class CH,DS store
+    class LLM ext
 ```
 
 Embeddings run inside the backend process, so no embedding API is called and no
@@ -78,17 +76,28 @@ never matches. Ingestion now runs on PyMuPDF and extracts every page twice,
 keeping whichever result is better:
 
 ```mermaid
-flowchart TD
-    PDF[PDF page] --> MD["pymupdf4llm → Markdown<br/>keeps headings and tables"]
-    PDF --> TXT["get_text(sort=True) → plain text<br/>reading order"]
-    MD --> C{"Markdown ≥ 80% of<br/>the plain text length?"}
-    C -- yes --> USEMD[use Markdown]
-    C -- "no — text drawn inside graphics" --> USETXT[use plain text]
-    USEMD --> POST[strip running heads/feet<br/>fold ligatures and odd spaces]
+flowchart TB
+    PDF["PDF page"]
+    PDF --> MD["<b>pymupdf4llm</b><br/>Markdown · headings + tables"]
+    PDF --> TXT["<b>get_text(sort)</b><br/>plain text · reading order"]
+
+    MD --> PICK{"Markdown ≥ 80%<br/>of plain-text length?"}
+    TXT --> PICK
+
+    PICK -- "yes" --> USEMD["use Markdown"]
+    PICK -- "no" --> USETXT["use plain text<br/><i>text drawn inside graphics</i>"]
+    USEMD --> POST
     USETXT --> POST
-    POST --> E{any page text at all?}
-    E -- no --> FAIL["fail with a scanned-PDF message<br/>instead of indexing nothing"]
-    E -- yes --> CHUNK[parent/child chunking]
+
+    POST["strip running heads/feet<br/>fold ligatures and odd spaces"]
+    POST --> ANY{"any text<br/>on any page?"}
+    ANY -- "no" --> FAIL["fail: looks scanned<br/><i>OCR is out of scope</i>"]
+    ANY -- "yes" --> OK["parent/child chunking"]
+
+    classDef bad fill:#fdecea,stroke:#c0392b
+    classDef good fill:#eafaf1,stroke:#27ae60
+    class FAIL bad
+    class OK good
 ```
 
 The fallback is the point. `pymupdf4llm` alone silently drops whole sections on
@@ -105,30 +114,39 @@ rather than indexing an empty document.
 The hosted deployment currently uses `PIPELINE=simple`:
 
 ```mermaid
-flowchart TD
-    START([START]) --> IG{input_guardrail}
-    IG -- "injection / empty / oversized" --> ENDX([END])
-    IG -- ok --> R[retrieve<br/>child search → parent chunks → dedupe]
-    R -- "no documents" --> NC[no_context<br/>refuse instead of answering from memory]
-    NC --> ENDX
-    R -- documents --> G[generate<br/>answer with bracketed citations]
-    G --> OG[output_guardrail<br/>redact secrets · check grounding]
-    OG --> ENDX
+flowchart TB
+    S([START]) --> IG{"input_guardrail"}
+    IG -- "blocked" --> E([END])
+    IG -- "ok" --> R["retrieve<br/>children → parents → dedupe"]
+    R --> ANY{"any documents?"}
+    ANY -- "no" --> NC["no_context<br/><i>refuse rather than<br/>answer from memory</i>"]
+    ANY -- "yes" --> G["generate<br/>answer with [n] citations"]
+    G --> OG["output_guardrail<br/>redact secrets · check grounding"]
+    NC --> E
+    OG --> E
+
+    classDef guard fill:#fff8e1,stroke:#c79100
+    class IG,OG,NC guard
 ```
 
 An optional corrective pipeline is available with `PIPELINE=multi_agent`:
 
 ```mermaid
-flowchart TD
-    START([START]) --> IG{input_guardrail}
-    IG -- blocked --> ENDX([END])
-    IG -- ok --> R[retrieve]
-    R --> GD{grade_documents<br/>keep only relevant}
-    GD -- "none relevant" --> NC[no_context] --> ENDX
-    GD -- relevant --> G[generate]
-    G --> V{verify<br/>is every claim supported?}
-    V -- "unsupported, first try" --> G
-    V -- grounded --> OG[output_guardrail] --> ENDX
+flowchart TB
+    S([START]) --> IG{"input_guardrail"}
+    IG -- "blocked" --> E([END])
+    IG -- "ok" --> R["retrieve"]
+    R --> GD{"grade_documents<br/>keep only relevant"}
+    GD -- "none relevant" --> NC["no_context"] --> E
+    GD -- "relevant" --> G["generate"]
+    G --> V{"verify<br/>every claim supported?"}
+    V -- "unsupported · revise once" --> G
+    V -- "grounded" --> OG["output_guardrail"] --> E
+
+    classDef guard fill:#fff8e1,stroke:#c79100
+    classDef agent fill:#eef4ff,stroke:#5b7db1
+    class IG,OG,NC guard
+    class GD,V agent
 ```
 
 The multi-agent pipeline adds relevance grading and answer verification, but it
