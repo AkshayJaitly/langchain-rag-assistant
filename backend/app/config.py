@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     fastembed_model: str = "BAAI/bge-small-en-v1.5"
     fastembed_cache_dir: str = ""
+    # The hosted instance has 512 MB. Embedding every child chunk of a document
+    # in one call is what pushed it over, so cap the ONNX working set: one
+    # inference batch at a time, in one thread.
+    fastembed_batch_size: int = 8
+    fastembed_threads: int = 1
 
     # Persistence
     chroma_dir: str = "./data/chroma"
@@ -60,6 +65,10 @@ class Settings(BaseSettings):
     parent_chunk_overlap: int = 200
     child_chunk_size: int = 400
     child_chunk_overlap: int = 50
+
+    # Number of source pages embedded per add_documents call. Ingestion peaks at
+    # roughly one batch of child chunks, not the whole document.
+    ingest_batch_size: int = 1
 
     # Retrieval
     retrieval_k: int = 4

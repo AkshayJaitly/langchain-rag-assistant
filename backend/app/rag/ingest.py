@@ -1,11 +1,13 @@
 """Document loading, parsing, and ingestion into the parent-child retriever."""
 from __future__ import annotations
 
+import gc
 import os
 
 from langchain_community.document_loaders import Docx2txtLoader, TextLoader
 from langchain_core.documents import Document
 
+from app.config import get_settings
 from app.rag.pdf import extract_pages
 from app.rag.vectorstore import get_retriever, record_ingested
 
@@ -81,8 +83,14 @@ def ingest_file(path: str, filename: str) -> tuple[int, int]:
         raise ValueError("No extractable text found in the document.")
 
     retriever = get_retriever()
-    # ParentDocumentRetriever handles parent+child splitting and embedding.
-    retriever.add_documents(docs)
+    # ParentDocumentRetriever handles parent+child splitting and embedding, but
+    # it embeds every child of everything it is handed in a single call. On a
+    # 512 MB host that is what runs the container out of memory on a document of
+    # any size, so feed it a few pages at a time and let each batch's arrays go.
+    batch_size = max(1, get_settings().ingest_batch_size)
+    for start in range(0, len(docs), batch_size):
+        retriever.add_documents(docs[start : start + batch_size])
+        gc.collect()
 
     skipped = docs[0].metadata.get("pages_without_text", 0)
     record_ingested(filename, len(docs))

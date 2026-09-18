@@ -10,19 +10,38 @@ output guardrails**.
 
 **Backend health:** [langchain-rag-assistant-tw27.onrender.com/api/health](https://langchain-rag-assistant-tw27.onrender.com/api/health)
 
+```mermaid
+flowchart LR
+    subgraph Browser["GitHub Pages"]
+        UI["React + Vite<br/>chat · doc list · local profile"]
+    end
+
+    subgraph Render["Render (free tier, 512 MB)"]
+        API["FastAPI"]
+        ING["Ingestion<br/>PyMuPDF → parent/child chunks"]
+        GRAPH["LangGraph pipeline<br/>guardrails · retrieve · generate"]
+        CHROMA[("Chroma<br/>child vectors")]
+        STORE[("File docstore<br/>parent chunks")]
+    end
+
+    GROQ["Groq<br/>openai/gpt-oss-120b"]
+    LS["LangSmith<br/>traces"]
+
+    UI -- "POST /api/upload" --> API
+    UI -- "POST /api/query" --> API
+    UI -- "GET /api/health · /api/documents" --> API
+    API --> ING
+    API --> GRAPH
+    ING -- "embed children<br/>FastEmbed ONNX" --> CHROMA
+    ING --> STORE
+    GRAPH -- "search children" --> CHROMA
+    GRAPH -- "fetch parents" --> STORE
+    GRAPH --> GROQ
+    GRAPH -.-> LS
 ```
-┌──────────────┐   /api/upload   ┌────────────────────────────────────────┐
-│ React (Vite) │ ──────────────► │ FastAPI                                │
-│ chat + docs  │   /api/query    │  ├─ ingest: PDF/Word/txt/md             │
-│ local profile│                 │  │          → parent + child chunks     │
-└──────────────┘ ◄────────────── │  │            chunks → local embeddings │
-                                 │  │            → Chroma (children)         │
-                                 │  │            → file docstore (parents)   │
-                                 │  └─ LangGraph pipeline:                   │
-                                 │       input guardrail → retrieve →        │
-                                 │       generate → output guardrail         │
-                                 └────────────────────────────────────────┘
-```
+
+Embeddings run inside the backend process, so no embedding API is called and no
+document text leaves the host except the retrieved context sent to Groq.
 
 ## Key pieces
 
@@ -50,32 +69,117 @@ time we search the children, then hand the LLM their **parent** chunks so it has
 the surrounding context. Parents live in a file-backed docstore; children live
 in Chroma.
 
+### PDF parsing
+
+Plain `pypdf` extraction was losing real content: multi-column pages came back
+interleaved, table rows arrived as run-on words (`Time2h`), and ligatures
+survived as single codepoints (`conﬁrmation`), which keyword-level retrieval
+never matches. Ingestion now runs on PyMuPDF and extracts every page twice,
+keeping whichever result is better:
+
+```mermaid
+flowchart TD
+    PDF[PDF page] --> MD["pymupdf4llm → Markdown<br/>keeps headings and tables"]
+    PDF --> TXT["get_text(sort=True) → plain text<br/>reading order"]
+    MD --> C{"Markdown ≥ 80% of<br/>the plain text length?"}
+    C -- yes --> USEMD[use Markdown]
+    C -- "no — text drawn inside graphics" --> USETXT[use plain text]
+    USEMD --> POST[strip running heads/feet<br/>fold ligatures and odd spaces]
+    USETXT --> POST
+    POST --> E{any page text at all?}
+    E -- no --> FAIL["fail with a scanned-PDF message<br/>instead of indexing nothing"]
+    E -- yes --> CHUNK[parent/child chunking]
+```
+
+The fallback is the point. `pymupdf4llm` alone silently drops whole sections on
+pages whose text is drawn inside graphics — one sample itinerary loses its
+entire DEPART/ARRIVE block that way. Measured across six sample PDFs, the hybrid
+extracts more text than `pypdf` did on every one, and the only tokens it "loses"
+are `pypdf`'s own run-together artifacts.
+
+OCR is deliberately out of scope: a scanned PDF now fails with a clear message
+rather than indexing an empty document.
+
 ### The LangGraph pipeline
 
 The hosted deployment currently uses `PIPELINE=simple`:
 
-```
-START → input_guardrail ─(blocked)────────────────► END
-              │
-           (ok) → retrieve ─(no docs)─► no_context → END
-                       │
-                    (docs) → generate → output_guardrail → END
+```mermaid
+flowchart TD
+    START([START]) --> IG{input_guardrail}
+    IG -- "injection / empty / oversized" --> ENDX([END])
+    IG -- ok --> R[retrieve<br/>child search → parent chunks → dedupe]
+    R -- "no documents" --> NC[no_context<br/>refuse instead of answering from memory]
+    NC --> ENDX
+    R -- documents --> G[generate<br/>answer with bracketed citations]
+    G --> OG[output_guardrail<br/>redact secrets · check grounding]
+    OG --> ENDX
 ```
 
 An optional corrective pipeline is available with `PIPELINE=multi_agent`:
 
-```text
-START → input_guardrail → retrieve → grade_documents → generate → verify
-                                      │                         │
-                                      └─ no relevant docs       └─ revise once
-                                             ↓                         ↓
-                                         no_context             output_guardrail
+```mermaid
+flowchart TD
+    START([START]) --> IG{input_guardrail}
+    IG -- blocked --> ENDX([END])
+    IG -- ok --> R[retrieve]
+    R --> GD{grade_documents<br/>keep only relevant}
+    GD -- "none relevant" --> NC[no_context] --> ENDX
+    GD -- relevant --> G[generate]
+    G --> V{verify<br/>is every claim supported?}
+    V -- "unsupported, first try" --> G
+    V -- grounded --> OG[output_guardrail] --> ENDX
 ```
 
 The multi-agent pipeline adds relevance grading and answer verification, but it
 also adds model calls and latency. Keep the simple pipeline as the production
 default until both versions have been compared with a LangSmith evaluation
 dataset.
+
+
+## Operational notes
+
+### Catching a retired upstream model
+
+Groq retired `llama-3.3-70b-versatile` while this app was deployed. Generation
+failed on every request, but `/api/health` kept reporting `ok` because it only
+echoed configuration, and the browser could not even read the error: FastAPI
+produces its default 500 *above* the CORS middleware, so the response carried no
+`Access-Control-Allow-Origin` header and `fetch` could only report
+`Failed to fetch`.
+
+Both holes are now closed:
+
+- The backend makes one cheap generation call at startup and reports the result
+  as `health.llm_status`. A retired or misconfigured model surfaces at deploy
+  time, and the UI shows an amber "model unavailable" pill instead of claiming
+  to be connected.
+- Unhandled errors are caught *inside* the CORS layer, so the real provider
+  error reaches the UI.
+
+### Running in 512 MB
+
+`ParentDocumentRetriever.add_documents` embeds every child chunk of everything
+it is handed in a single call, which is enough to OOM the free tier on a
+multi-page PDF. Ingestion therefore feeds it `INGEST_BATCH_SIZE` pages at a
+time, FastEmbed runs with a small batch size on one thread, and
+`OMP_NUM_THREADS=1` keeps ONNX Runtime from allocating per-thread arenas.
+
+Two other free-tier behaviours are worth knowing:
+
+- **The disk is ephemeral.** Uploaded documents and the Chroma index are wiped
+  by every redeploy. The index is a demo of the pipeline, not storage.
+- **The instance sleeps** after roughly 15 idle minutes and takes up to a minute
+  to wake. The UI retries health on a backoff and shows "waking backend…" rather
+  than reporting the backend as offline.
+
+### Embeddings are not interchangeable
+
+The hosted backend uses FastEmbed ONNX (`BAAI/bge-small-en-v1.5`) because torch
+does not fit in 512 MB; local development defaults to
+`sentence-transformers/all-MiniLM-L6-v2`. The two produce different vectors, so
+a Chroma store built locally cannot be served by the hosted backend — reindex
+after switching backends.
 
 ## Prerequisites
 
@@ -122,9 +226,9 @@ conversation memory.
 
 | Method | Path | Body | Purpose |
 | --- | --- | --- | --- |
-| GET | `/api/health` | – | Provider, model, embeddings, pipeline, and tracing status |
+| GET | `/api/health` | – | Provider, model, embeddings, pipeline, tracing status, and `llm_status` from the startup model probe |
 | GET | `/api/documents` | – | List documents in the current backend index |
-| POST | `/api/upload` | multipart `file` | Parse, embed, and index a document |
+| POST | `/api/upload` | multipart `file` | Parse, embed, and index a document; returns `pages_without_text` so a partly-scanned PDF is visible |
 | POST | `/api/query` | `{"question": "..."}` | Answer, sources, guardrails, blocked status, and LangSmith `trace_id` |
 
 ## Configuration
@@ -160,7 +264,7 @@ Set `LLM_PROVIDER` in `backend/.env`:
 | -------------- | --------- | --------------------------------------------------------------- |
 | `anthropic`    | paid API  | Set `ANTHROPIC_API_KEY`; pick `LLM_MODEL` (`claude-haiku-4-5` = cheapest, `claude-sonnet-5` = balanced, `claude-opus-5` = best). |
 | `openai`       | paid API  | Set `OPENAI_API_KEY`; pick `OPENAI_MODEL` (default `gpt-4o-mini`). |
-| `groq`         | **free**  | Free key at [console.groq.com](https://console.groq.com); set `GROQ_API_KEY`. Fast hosted Llama — ideal for a $0 always-on deploy. |
+| `groq`         | **free**  | Free key at [console.groq.com](https://console.groq.com); set `GROQ_API_KEY` and `GROQ_MODEL` (default `openai/gpt-oss-120b`). Ideal for a $0 always-on deploy. Groq retires models regularly — check `GET /api/models` on their API if `health.llm_status` reports `model_not_found`. |
 | `ollama`       | **free**  | Install [Ollama](https://ollama.com), run `ollama pull llama3.1:8b`, set `OLLAMA_MODEL`. No API key; local only (won't fit free cloud tiers). |
 
 ## Deploying (free)
@@ -173,7 +277,9 @@ bundle.
    (it reads [`render.yaml`](render.yaml)). Set `GROQ_API_KEY` and
    `LANGSMITH_API_KEY` in the dashboard as secret environment variables. The
    current backend is
-   `https://langchain-rag-assistant-tw27.onrender.com`.
+   `https://langchain-rag-assistant-tw27.onrender.com`. Note that environment
+   variables already set in the Render dashboard **override** `render.yaml`, so
+   changing a model there means changing it in the dashboard too.
 2. **Frontend → point it at the backend:** add an Actions repository variable
    named `VITE_API_BASE` with the full Render URL (repo *Settings → Secrets and
    variables → Actions → Variables*).

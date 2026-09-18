@@ -26,7 +26,11 @@ def get_embeddings() -> Embeddings:
         # Imported lazily so the torch path never pulls in fastembed and vice versa.
         from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 
-        options = {"model_name": settings.fastembed_model}
+        options = {
+            "model_name": settings.fastembed_model,
+            "batch_size": settings.fastembed_batch_size,
+            "threads": settings.fastembed_threads,
+        }
         if settings.fastembed_cache_dir:
             options["cache_dir"] = settings.fastembed_cache_dir
         return FastEmbedEmbeddings(**options)

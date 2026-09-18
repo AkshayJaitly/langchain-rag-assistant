@@ -8,6 +8,10 @@ ENV PYTHONUNBUFFERED=1 \
     FASTEMBED_MODEL=BAAI/bge-small-en-v1.5 \
     FASTEMBED_CACHE_DIR=/app/.cache/fastembed
 
+# ONNX Runtime allocates per-thread arenas; a single thread keeps ingestion
+# inside the 512 MB free tier.
+ENV OMP_NUM_THREADS=1
+
 # Install deps first for better layer caching.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
