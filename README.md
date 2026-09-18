@@ -43,6 +43,13 @@ document text leaves the host except the retrieved context sent to Groq.
 
 ## How this is built
 
+[`docs/related-work.md`](docs/related-work.md) maps each design decision to the
+literature it sits next to — hybrid retrieval, distractor construction,
+ingest-time injection defense, abstention, chunking, and running under a
+resource budget. It is positioning rather than a novelty claim: where this
+project resembles published research, it is applying it.
+
+
 Capabilities are specified before they are implemented. Each spec in
 [`specs/`](specs/) states the constraints it works under and numbered
 acceptance criteria; the tests reference those IDs, so spec, implementation and
