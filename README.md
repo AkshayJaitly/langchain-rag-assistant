@@ -41,6 +41,15 @@ flowchart TB
 Embeddings run inside the backend process, so no embedding API is called and no
 document text leaves the host except the retrieved context sent to Groq.
 
+## How this is built
+
+Capabilities are specified before they are implemented. Each spec in
+[`specs/`](specs/) states the constraints it works under and numbered
+acceptance criteria; the tests reference those IDs, so spec, implementation and
+test can be checked against one another. Two constraints apply throughout:
+everything runs on free tiers (Render free at 512 MB, GitHub Pages, Groq's free
+API), and the automated suites never call a network service.
+
 ## Key pieces
 
 | Concern | Implementation |
@@ -51,13 +60,18 @@ document text leaves the host except the retrieved context sent to Groq.
 | Hosted embeddings | FastEmbed `BAAI/bge-small-en-v1.5` (local to the backend, no embedding API) |
 | Local embeddings | Hugging Face `sentence-transformers/all-MiniLM-L6-v2` by default |
 | Parent-child retrieval | LangChain `ParentDocumentRetriever` — embed small chunks, return larger parent chunks |
+| Hybrid retrieval | BM25 + dense, fused with Reciprocal Rank Fusion ([spec 001](specs/001-hybrid-retrieval.md)) |
+| Reranking | LLM reranker, opt-in ([spec 002](specs/002-reranking.md)) |
+| Multi-turn | Follow-ups condensed to standalone questions ([spec 003](specs/003-conversation-memory.md)) |
+| Isolation | Per-visitor tenant scoping ([spec 004](specs/004-tenant-isolation.md)) |
+| Evaluation | Golden dataset, retrieval metrics gate CI ([spec 006](specs/006-evaluation.md)) |
 | Orchestration | LangGraph `StateGraph` with conditional guardrail edges |
 | Hosted generation | Groq `openai/gpt-oss-120b` |
 | Other providers | Anthropic, OpenAI, and local Ollama are configurable |
 | Observability | LangSmith traces in project `pr-puzzled-robot-90` |
 | Guardrails | Prompt Guard 2 classifier on questions *and* ingested documents, no-context refusal, secret/PII redaction, grounding checks |
 | Demo corpus | Three bundled fictional PDFs, seeded automatically when the index is empty |
-| Tests | `pytest` suite, run offline in CI on every backend change |
+| Tests | Unit, integration, BDD and evaluation suites, all offline ([spec 007](specs/007-test-strategy.md)) |
 | Parsing | `pymupdf` + `pymupdf4llm` (PDF), `docx2txt` (Word), `TextLoader` (txt/md) |
 | UI persistence | Display name, avatar, theme, and the latest 100 messages in browser `localStorage` |
 
@@ -119,7 +133,8 @@ The hosted deployment currently uses `PIPELINE=simple`:
 flowchart TB
     S([START]) --> IG{"input_guardrail"}
     IG -- "blocked" --> E([END])
-    IG -- "ok" --> R["retrieve<br/>children → parents → dedupe"]
+    IG -- "ok" --> C["condense<br/><i>follow-up → standalone question</i>"]
+    C --> R["retrieve<br/>hybrid → fuse → filter → rerank"]
     R --> ANY{"any documents?"}
     ANY -- "no" --> NC["no_context<br/><i>refuse rather than<br/>answer from memory</i>"]
     ANY -- "yes" --> G["generate<br/>answer with [n] citations"]
@@ -156,6 +171,36 @@ also adds model calls and latency. Keep the simple pipeline as the production
 default until both versions have been compared with a LangSmith evaluation
 dataset.
 
+
+## Retrieval
+
+```mermaid
+flowchart TB
+    Q["question<br/><i>condensed first if it is a follow-up</i>"]
+    Q --> D["dense search<br/>child chunks"]
+    Q --> B["BM25 search<br/>child chunks"]
+    D --> F{"Reciprocal Rank Fusion<br/>1/(60 + rank)"}
+    B --> F
+    F --> T["drop passages flagged<br/>as injection"]
+    T --> R["rerank<br/><i>opt-in</i>"]
+    R --> P["parents of the winners<br/>deduped, top k"]
+
+    classDef opt fill:#f6f6f6,stroke:#999,stroke-dasharray:4 3
+    class R opt
+```
+
+Dense embeddings handle paraphrase well and rare literal tokens badly — a query
+for `ONEK2J` or `99.95%` gives cosine similarity nothing to work with. BM25 is
+the mirror image, so both run and their rankings are fused.
+
+Reranking is **off by default**, and the reason is worth stating: the usual
+answer is a cross-encoder, and a cross-encoder needs torch, which does not fit
+alongside the embedding model in 512 MB — this deployment already OOM-killed
+itself on ingestion. So the reranker is the configured chat model, asked for an
+ordering in a single call, and enabling it is a documented trade.
+
+Everything here fails open. If BM25 cannot build, the dense results still
+answer. If reranking fails, the fused order stands.
 
 ## Guardrails
 
@@ -253,6 +298,18 @@ Two other free-tier behaviours are worth knowing:
   to wake. The UI retries health on a backoff and shows "waking backend…" rather
   than reporting the backend as offline.
 
+### Isolation is not authentication
+
+Each browser generates an opaque tenant id, keeps it in `localStorage` and sends
+it as `X-Tenant-Id`. Uploads are scoped to it; retrieval sees that tenant plus
+the reserved `public` tenant that owns the bundled samples. That keeps visitors
+out of each other's documents by default.
+
+It is **not** a security boundary. There is no account system, nothing verifies
+the header, and anyone can send any value. It prevents accidental sharing, not a
+determined caller. Adding real authorisation means adding accounts, which is the
+next thing this project would need before holding anything that matters.
+
 ### Embeddings are not interchangeable
 
 The hosted backend uses FastEmbed ONNX (`BAAI/bge-small-en-v1.5`) because torch
@@ -262,6 +319,33 @@ a Chroma store built locally cannot be served by the hosted backend — reindex
 after switching backends.
 
 
+## Evaluation
+
+Quality claims come from a dataset, not a demo. The golden set is written
+against the bundled samples, so it runs on any checkout.
+
+```bash
+cd backend
+python -m eval.run --retrieval            # embeddings only, no provider call
+python -m eval.run --guardrails           # needs GROQ_API_KEY
+python -m eval.run --answers              # needs a generation provider
+python -m eval.run --compare hybrid       # hybrid on vs off
+```
+
+Document-level recall saturates on a three-document corpus — every question is
+trivially attributable — so the discriminating metric is **page level**:
+
+| Configuration | page recall@4 | page MRR | median latency |
+| --- | --- | --- | --- |
+| Hybrid (BM25 + dense) | 1.00 | 0.964 | 12 ms |
+| Dense only | 1.00 | 0.929 | 6 ms |
+
+Hybrid ranks the right page higher, and that is the whole of the measured gain.
+It is a small effect on a small corpus, and it is reported rather than assumed —
+which is the point of having the harness. Retrieval metrics are deterministic
+and gate CI with a recall floor; answer quality needs a judge and stays a
+manual run.
+
 ## Tests
 
 ```bash
@@ -270,13 +354,20 @@ pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest
 ```
 
-The suite runs offline — `tests/conftest.py` disables the Prompt Guard
-classifier and points persistence at a temporary directory, so no API key is
-needed and no test calls a provider. It covers PDF extraction (the hybrid
-fallback, running-head stripping, ligature folding, scanned-PDF failure),
-guardrails (redaction coverage, the refusal-prefix bypass, the regex fallback),
-and retrieval (parent dedupe, citation normalisation, re-upload replacing rather
-than duplicating). CI runs it on every change under `backend/`.
+Four layers, all offline ([spec 007](specs/007-test-strategy.md)):
+
+| Layer | What it covers |
+| --- | --- |
+| Unit | Extraction, RRF maths, guardrail patterns, rerank parsing, condensing, chunking selection |
+| Integration | The FastAPI app through `TestClient` — upload, query, citations, error paths, tenant isolation |
+| BDD | `tests/features/*.feature` in business language: grounded answers, refusal, injection, isolation |
+| Evaluation | Retrieval quality against the golden dataset, with a floor that fails the build |
+
+`tests/conftest.py` disables the Prompt Guard classifier, swaps in deterministic
+hash-based embeddings and a stub model, and gives every test its own
+directories — so the suite needs no API key, touches no network, and runs in
+about two seconds. Extraction tests build real PDFs at runtime, because
+extraction is the thing under test.
 
 ## Prerequisites
 
@@ -324,14 +415,31 @@ conversation memory.
 | Method | Path | Body | Purpose |
 | --- | --- | --- | --- |
 | GET | `/api/health` | – | Provider, model, embeddings, pipeline, tracing status, and `llm_status` from the startup model probe |
-| GET | `/api/documents` | – | List documents in the current backend index |
+| GET | `/api/documents` | – | Documents readable by the caller: their own plus the shared samples |
 | POST | `/api/upload` | multipart `file` | Parse, embed, and index a document; returns `pages_without_text` so a partly-scanned PDF is visible |
-| POST | `/api/query` | `{"question": "..."}` | Answer, sources, guardrails, blocked status, and LangSmith `trace_id` |
+| POST | `/api/query` | `{"question": "...", "history": [...]}` | Answer, sources, guardrails, blocked status, `standalone_question` when a follow-up was rewritten, and LangSmith `trace_id` |
+
+All endpoints accept an optional `X-Tenant-Id` header. See
+[spec 004](specs/004-tenant-isolation.md) — and the caveat below.
 
 ## Configuration
 
 All settings are environment variables (see `backend/.env.example`): model,
 chunk sizes, retrieval `k`, persistence directories, CORS origins.
+
+The ones added by the specs:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `HYBRID_RETRIEVAL` | `true` | BM25 + dense fused with RRF; `false` is dense only |
+| `RRF_K` | `60` | Fusion constant |
+| `RERANK` | `false` | LLM reranking of fused candidates |
+| `RERANK_CANDIDATES` | `20` | Candidates sent to the reranker in one call |
+| `CHUNKING` | `recursive` | `semantic` splits at embedding-similarity breakpoints |
+| `HISTORY_TURNS` | `6` | Turns kept for follow-up resolution |
+| `GUARD_ENABLED` | `true` | Prompt Guard classifier; `false` falls back to regex |
+| `GUARD_THRESHOLD` | `0.5` | Injection probability above which a question is blocked |
+| `INGEST_BATCH_SIZE` | `1` | Pages embedded per call, to stay inside 512 MB |
 
 ## LangSmith tracing
 

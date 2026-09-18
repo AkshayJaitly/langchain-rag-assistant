@@ -21,6 +21,11 @@ langchain-chroma==0.2.0
 langchain-text-splitters==0.3.5
 langgraph==0.2.62
 
+# Lexical retrieval for the hybrid path (spec 001). Pure Python, no model.
+rank-bm25==0.2.2
+# Semantic chunking (spec 005), opt-in via CHUNKING=semantic.
+langchain-experimental==0.3.4
+
 # Vector DB + embeddings
 chromadb==0.5.23
 sentence-transformers==3.3.1

@@ -10,6 +10,7 @@ from langchain_core.documents import Document
 from app.config import get_settings
 from app.rag import guardrails
 from app.rag.pdf import extract_pages
+from app.rag.retrieval import invalidate_caches
 from app.rag.vectorstore import get_retriever, record_ingested, remove_document
 
 SUPPORTED_EXTENSIONS = {"pdf", "docx", "doc", "txt", "md"}
@@ -67,11 +68,15 @@ def load_document(path: str, filename: str) -> list[Document]:
     return docs
 
 
-def ingest_file(path: str, filename: str) -> tuple[int, int, int]:
+def ingest_file(
+    path: str, filename: str, tenant_id: str | None = None
+) -> tuple[int, int, int]:
     """Load a file, split it into parent/child chunks, embed and store it.
 
     Returns (documents ingested, pages with no text, pages flagged as injection).
     """
+    settings = get_settings()
+    tenant = tenant_id or settings.public_tenant
     ext = _extension(filename)
     if ext not in SUPPORTED_EXTENSIONS:
         raise ValueError(
@@ -91,25 +96,32 @@ def ingest_file(path: str, filename: str) -> tuple[int, int, int]:
     suspicious = 0
     for doc in docs:
         flagged, score = guardrails.looks_like_injection(doc.page_content)
-        doc.metadata["injection_score"] = round(score, 4) if score is not None else None
+        # Chroma rejects None metadata values, and the score is None whenever
+        # the classifier is unreachable -- omit the key instead of storing None.
+        if score is not None:
+            doc.metadata["injection_score"] = round(score, 4)
         doc.metadata["suspect_injection"] = flagged
+        # Spec 004 AC-1: the tenant rides on every chunk, so retrieval can
+        # filter on it without a second store.
+        doc.metadata["tenant_id"] = tenant
         suspicious += int(flagged)
 
-    # Re-uploading replaces the previous copy instead of adding a second one.
-    remove_document(filename)
+    # Re-uploading replaces this tenant's previous copy, not anyone else's.
+    remove_document(filename, tenant)
 
     retriever = get_retriever()
     # ParentDocumentRetriever handles parent+child splitting and embedding, but
     # it embeds every child of everything it is handed in a single call. On a
     # 512 MB host that is what runs the container out of memory on a document of
     # any size, so feed it a few pages at a time and let each batch's arrays go.
-    batch_size = max(1, get_settings().ingest_batch_size)
+    batch_size = max(1, settings.ingest_batch_size)
     for start in range(0, len(docs), batch_size):
         retriever.add_documents(docs[start : start + batch_size])
         gc.collect()
 
     skipped = docs[0].metadata.get("pages_without_text", 0)
-    record_ingested(filename, len(docs), suspicious)
+    record_ingested(filename, len(docs), suspicious, tenant)
+    invalidate_caches()
     return len(docs), skipped, suspicious
 
 

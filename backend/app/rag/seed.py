@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 
+from app.config import get_settings
 from app.rag.ingest import ingest_file
 from app.rag.vectorstore import read_manifest
 
@@ -41,7 +42,9 @@ def seed_samples() -> int:
     for path in sample_files():
         name = os.path.basename(path)
         try:
-            ingest_file(path, name)
+            # Samples belong to the public tenant, so every visitor can read
+            # them while their own uploads stay private (spec 004 AC-1).
+            ingest_file(path, name, get_settings().public_tenant)
             added += 1
         except Exception:  # noqa: BLE001 - a bad sample must not block startup
             logger.exception("Could not seed sample document %s", name)

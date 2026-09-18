@@ -140,6 +140,16 @@
   background: rgba(229, 72, 77, 0.18);
   color: #ffc7c5;
 }
+/* Shows the standalone rewrite of a follow-up question. */
+.rewritten {
+  font-size: 12px;
+  color: var(--ink-3, #8fa3b0);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
 .toast.warn {
   background: rgba(240, 177, 0, 0.16);
   color: #ffe6a3;

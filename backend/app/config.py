@@ -77,8 +77,30 @@ class Settings(BaseSettings):
     # roughly one batch of child chunks, not the whole document.
     ingest_batch_size: int = 1
 
-    # Retrieval
+    # Retrieval (spec 001). Dense embeddings miss rare literal tokens that BM25
+    # finds, and vice versa; RRF fuses the two rankings.
     retrieval_k: int = 4
+    hybrid_retrieval: bool = True
+    rrf_k: int = 60
+    # Candidates pulled from each retriever before fusion.
+    fusion_candidates: int = 20
+
+    # Reranking (spec 002). A cross-encoder needs torch, which does not fit in
+    # 512 MB next to the embedding model, so this reranks with the configured
+    # LLM and stays off by default.
+    rerank: bool = False
+    rerank_candidates: int = 20
+
+    # Chunking strategy (spec 005): "recursive" or "semantic".
+    chunking: str = "recursive"
+    semantic_breakpoint_percentile: int = 90
+
+    # Conversation memory (spec 003). In-process only; lost on restart.
+    history_turns: int = 6
+
+    # Tenancy (spec 004). Isolation between visitors, not authentication.
+    public_tenant: str = "public"
+    anonymous_tenant: str = "anonymous"
 
     # CORS
     cors_origins: str = "http://localhost:5173"
@@ -92,6 +114,16 @@ class Settings(BaseSettings):
     langsmith_environment: str = "development"
     langsmith_hide_inputs: bool = True
     langsmith_hide_outputs: bool = True
+
+    @property
+    def chunking_strategy(self) -> str:
+        """Validated chunking strategy (spec 005 AC-5: fail fast, never guess)."""
+        value = self.chunking.strip().lower()
+        if value not in {"recursive", "semantic"}:
+            raise ValueError(
+                f"Unknown CHUNKING '{self.chunking}'. Use 'recursive' or 'semantic'."
+            )
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:

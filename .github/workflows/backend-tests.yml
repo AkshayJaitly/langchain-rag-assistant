@@ -32,4 +32,26 @@ jobs:
             backend/requirements.txt
             backend/requirements-dev.txt
       - run: pip install -r requirements.txt -r requirements-dev.txt
-      - run: python -m pytest tests -q
+
+      - name: Unit, integration and BDD suites
+        run: python -m pytest -q
+
+      - name: Retrieval evaluation
+        # Deterministic: embeddings only, no provider call, so it can gate every
+        # change. The floor catches a retrieval regression that unit tests
+        # cannot see. Answer quality needs a judge and stays a manual run.
+        env:
+          EMBEDDING_BACKEND: fastembed
+          GUARD_ENABLED: "false"
+          CHROMA_DIR: /tmp/eval/chroma
+          DOCSTORE_DIR: /tmp/eval/docstore
+          UPLOAD_DIR: /tmp/eval/uploads
+        run: python -m eval.run --retrieval --min-recall 0.9 --json /tmp/eval-report.json
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: /tmp/eval-report.json
+          if-no-files-found: ignore

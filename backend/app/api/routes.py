@@ -1,8 +1,8 @@
 """HTTP API: upload documents, query the RAG pipeline, list ingested docs."""
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from fastapi import APIRouter, File, Header, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings, langsmith_enabled
@@ -22,8 +22,16 @@ def set_llm_status(status: str) -> None:
     _llm_status = status
 
 
+class Turn(BaseModel):
+    role: str
+    content: str
+
+
 class QueryRequest(BaseModel):
     question: str
+    # Prior turns for follow-up resolution (spec 003). Sent by the client, which
+    # already keeps them; the server holds no cross-request state.
+    history: list[Turn] = Field(default_factory=list)
 
 
 class Source(BaseModel):
@@ -35,10 +43,28 @@ class Source(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
+    # Set only when a follow-up was rewritten, so the UI can show what was
+    # actually retrieved on.
+    standalone_question: str | None = None
     sources: list[Source]
     guardrails: list[str]
     blocked: bool
     trace_id: str | None = None
+
+
+def _tenants(header: str | None) -> tuple[str, set[str]]:
+    """(write tenant, readable tenants) for a request (spec 004).
+
+    A visitor reads their own documents plus the public samples. No header means
+    an anonymous tenant, which still sees the samples.
+    """
+    settings = get_settings()
+    tenant = (header or "").strip()[:64] or settings.anonymous_tenant
+    if tenant == settings.public_tenant:
+        # The public tenant is reserved for the bundled samples; a caller
+        # claiming it writes as anonymous instead of overwriting them.
+        tenant = settings.anonymous_tenant
+    return tenant, {tenant, settings.public_tenant}
 
 
 class UploadResponse(BaseModel):
@@ -73,6 +99,9 @@ def health() -> dict[str, str]:
         "llm_status": _llm_status,
         # Ingestion tuning, echoed so a running instance can be checked against
         # the code that is supposed to be deployed.
+        "hybrid_retrieval": str(settings.hybrid_retrieval).lower(),
+        "rerank": str(settings.rerank).lower(),
+        "chunking": settings.chunking_strategy,
         "ingest_batch_size": str(settings.ingest_batch_size),
         "embed_batch_size": str(settings.fastembed_batch_size),
         "embed_threads": str(settings.fastembed_threads),
@@ -80,12 +109,21 @@ def health() -> dict[str, str]:
 
 
 @router.get("/documents")
-def documents() -> dict[str, list]:
-    return {"documents": read_manifest()}
+def documents(x_tenant_id: str | None = Header(default=None)) -> dict[str, list]:
+    settings = get_settings()
+    _, readable = _tenants(x_tenant_id)
+    rows = []
+    for row in read_manifest(readable):
+        shared = row.get("tenant_id", settings.public_tenant) == settings.public_tenant
+        rows.append({**row, "shared": shared})
+    return {"documents": rows}
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload(file: UploadFile = File(...)) -> UploadResponse:
+async def upload(
+    file: UploadFile = File(...),
+    x_tenant_id: str | None = Header(default=None),
+) -> UploadResponse:
     settings = get_settings()
     filename = file.filename or "upload"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -102,8 +140,9 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
 
     path = save_upload(contents, filename, settings.upload_dir)
     try:
+        tenant, _ = _tenants(x_tenant_id)
         count, skipped, suspicious = await run_in_threadpool(
-            ingest_file, path, filename
+            ingest_file, path, filename, tenant
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -117,8 +156,15 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
 
 
 @router.post("/query", response_model=QueryResponse)
-def query(req: QueryRequest) -> QueryResponse:
+def query(
+    req: QueryRequest, x_tenant_id: str | None = Header(default=None)
+) -> QueryResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question is required.")
-    result = answer_question(req.question)
+    _, readable = _tenants(x_tenant_id)
+    result = answer_question(
+        req.question,
+        history=[t.model_dump() for t in req.history],
+        tenants=readable,
+    )
     return QueryResponse(**result)

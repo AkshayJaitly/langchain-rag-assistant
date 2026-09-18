@@ -25,6 +25,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import get_settings
 from app.rag.embeddings import get_embeddings
+from app.rag.retrieval import invalidate_caches
 
 _COLLECTION = "rag_children"
 
@@ -34,19 +35,37 @@ def _manifest_path() -> str:
     return os.path.join(settings.docstore_dir, "_manifest.json")
 
 
-def read_manifest() -> list[dict]:
-    """Return the list of ingested documents ({filename, chunks})."""
+def read_manifest(tenants: set[str] | None = None) -> list[dict]:
+    """Ingested documents, optionally limited to a set of tenants (spec 004)."""
     path = _manifest_path()
     if not os.path.exists(path):
         return []
     with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+        rows = json.load(fh)
+    if tenants is None:
+        return rows
+    default = get_settings().public_tenant
+    return [r for r in rows if r.get("tenant_id", default) in tenants]
 
 
-def record_ingested(filename: str, chunks: int, suspicious: int = 0) -> None:
-    """Record an ingested document, replacing any earlier entry of the name."""
-    manifest = [d for d in read_manifest() if d.get("filename") != filename]
-    entry = {"filename": filename, "chunks": chunks}
+def record_ingested(
+    filename: str, chunks: int, suspicious: int = 0, tenant_id: str | None = None
+) -> None:
+    """Record an ingested document, replacing this tenant's earlier entry only.
+
+    Spec 004 AC-5: a re-upload must not touch another tenant's row of the same
+    name, so identity here is (tenant, filename) rather than filename alone.
+    """
+    tenant = tenant_id or get_settings().public_tenant
+    manifest = [
+        d
+        for d in read_manifest()
+        if not (
+            d.get("filename") == filename
+            and d.get("tenant_id", get_settings().public_tenant) == tenant
+        )
+    ]
+    entry = {"filename": filename, "chunks": chunks, "tenant_id": tenant}
     if suspicious:
         entry["suspect_injection_pages"] = suspicious
     manifest.append(entry)
@@ -55,7 +74,7 @@ def record_ingested(filename: str, chunks: int, suspicious: int = 0) -> None:
         json.dump(manifest, fh, indent=2)
 
 
-def remove_document(filename: str) -> int:
+def remove_document(filename: str, tenant_id: str | None = None) -> int:
     """Drop a document's existing chunks. Returns the number of children removed.
 
     Re-uploading a file used to embed a second copy of every chunk, so the same
@@ -63,7 +82,10 @@ def remove_document(filename: str) -> int:
     twice. Clearing first makes re-upload a replace rather than an append.
     """
     retriever = get_retriever()
-    collection = retriever.vectorstore.get(where={"source": filename})
+    tenant = tenant_id or get_settings().public_tenant
+    collection = retriever.vectorstore.get(
+        where={"$and": [{"source": filename}, {"tenant_id": tenant}]}
+    )
     ids = collection.get("ids") or []
     if not ids:
         return 0
@@ -78,7 +100,30 @@ def remove_document(filename: str) -> int:
     retriever.vectorstore.delete(ids=ids)
     if parent_ids:
         retriever.docstore.mdelete(list(parent_ids))
+    invalidate_caches()
     return len(ids)
+
+
+def _child_splitter(settings):
+    """Child splitter for the configured strategy (spec 005).
+
+    Semantic chunking embeds every sentence to find topic breakpoints, which is
+    real work on a 512 MB host, so "recursive" stays the default and the
+    strategy is reported by /api/health.
+    """
+    if settings.chunking_strategy == "semantic":
+        from langchain_experimental.text_splitter import SemanticChunker
+
+        return SemanticChunker(
+            embeddings=get_embeddings(),
+            breakpoint_threshold_type="percentile",
+            breakpoint_threshold_amount=settings.semantic_breakpoint_percentile,
+        )
+
+    return RecursiveCharacterTextSplitter(
+        chunk_size=settings.child_chunk_size,
+        chunk_overlap=settings.child_chunk_overlap,
+    )
 
 
 @lru_cache
@@ -102,10 +147,7 @@ def get_retriever() -> ParentDocumentRetriever:
         chunk_size=settings.parent_chunk_size,
         chunk_overlap=settings.parent_chunk_overlap,
     )
-    child_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=settings.child_chunk_size,
-        chunk_overlap=settings.child_chunk_overlap,
-    )
+    child_splitter = _child_splitter(settings)
 
     return ParentDocumentRetriever(
         vectorstore=vectorstore,

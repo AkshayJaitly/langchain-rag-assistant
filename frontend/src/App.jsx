@@ -6,6 +6,7 @@ import "./App.css";
 // No API keys ever live here — they stay server-side on the backend.
 const API = import.meta.env.VITE_API_BASE || "";
 const HISTORY_KEY = "rag-chat-history-v1";
+const TENANT_KEY = "rag-tenant-v1";
 const PROFILE_KEY = "rag-profile-v1";
 const DEFAULT_AVATARS = Array.from(
   { length: 6 },
@@ -16,6 +17,10 @@ const DEFAULT_AVATARS = Array.from(
 // policy, quarterly metrics), which a fresh backend seeds itself with. The last
 // one is deliberately unanswerable: it shows the grounding guardrail refusing
 // rather than inventing an answer.
+// Turns sent back as context for follow-up resolution. Matches HISTORY_TURNS
+// on the backend.
+const HISTORY_TURNS = 6;
+
 const EXAMPLES = [
   "What's the service credit if uptime drops to 97%?",
   "How many office days per month are required?",
@@ -24,6 +29,34 @@ const EXAMPLES = [
   "Summarize the key terms across these documents",
   "What do these documents say about headcount in 2027?",
 ];
+
+/** Opaque per-browser id scoping uploads (spec 004).
+ *
+ * This isolates visitors from each other's documents. It is deliberately not
+ * authentication -- there is no account system here, and anyone can send any
+ * header. It stops accidental sharing, not a determined caller.
+ */
+function getTenantId() {
+  try {
+    const existing = localStorage.getItem(TENANT_KEY);
+    if (existing) return existing;
+    const created =
+      globalThis.crypto?.randomUUID?.() ??
+      `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(TENANT_KEY, created);
+    return created;
+  } catch {
+    // Private mode or blocked storage: fall back to a per-session id.
+    return `t-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+const TENANT_ID = getTenantId();
+
+/** Every request carries the tenant, so the backend can scope it. */
+function apiHeaders(extra = {}) {
+  return { "X-Tenant-Id": TENANT_ID, ...extra };
+}
 
 function loadStored(key, fallback) {
   try {
@@ -141,6 +174,11 @@ function Message({ msg, profile }) {
     <div className="row assistant">
       <div className="avatar">✦</div>
       <div className="assistant-card">
+        {msg.standaloneQuestion && (
+          <div className="rewritten" title="Your follow-up was resolved into a standalone question before retrieval">
+            interpreted as: {msg.standaloneQuestion}
+          </div>
+        )}
         <AnswerText text={msg.content} />
         <div className="meta">
           {msg.error ? (
@@ -242,7 +280,7 @@ export default function App() {
 
   const refreshDocs = async () => {
     try {
-      const res = await fetch(`${API}/api/documents`);
+      const res = await fetch(`${API}/api/documents`, { headers: apiHeaders() });
       if (!res.ok) return false;
       const data = await responseData(res);
       setDocs(data.documents || []);
@@ -319,7 +357,11 @@ export default function App() {
     const form = new FormData();
     form.append("file", file);
     try {
-      const res = await fetch(`${API}/api/upload`, { method: "POST", body: form });
+      const res = await fetch(`${API}/api/upload`, {
+        method: "POST",
+        body: form,
+        headers: apiHeaders(),
+      });
       const data = await responseData(res);
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       setStatus({
@@ -345,10 +387,17 @@ export default function App() {
     setQuestion("");
     setLoading(true);
     try {
+      // Prior turns let the backend resolve follow-ups like "and below that?"
+      // into a standalone question before retrieving (spec 003).
+      const history = messages
+        .filter((m) => !m.error)
+        .slice(-HISTORY_TURNS)
+        .map((m) => ({ role: m.role, content: m.content }));
+
       const res = await fetch(`${API}/api/query`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        headers: apiHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ question: q, history }),
       });
       const data = await responseData(res);
       if (!res.ok) throw new Error(data.detail || "Query failed");
@@ -359,6 +408,7 @@ export default function App() {
           content: data.answer,
           sources: data.sources,
           guardrails: data.guardrails,
+          standaloneQuestion: data.standalone_question,
         },
       ]);
     } catch (err) {
@@ -470,8 +520,10 @@ export default function App() {
           <ul className="doclist">
             {docs.map((d, i) => (
               <li key={`${d.filename}-${i}`}>
-                <span className="doc-icon">▤</span>
-                <span className="doc-name">{d.filename}</span>
+                <span className="doc-icon">{d.shared ? "◆" : "▤"}</span>
+                <span className="doc-name" title={d.shared ? "Shared sample document" : "Your upload"}>
+                  {d.filename}
+                </span>
                 <span className="doc-count">{d.chunks}</span>
               </li>
             ))}

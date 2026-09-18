@@ -1,2 +1,5 @@
 # Test-only dependencies. The suite runs offline; see tests/conftest.py.
 pytest==8.3.4
+pytest-bdd==8.1.0
+# TestClient transport.
+httpx==0.28.1

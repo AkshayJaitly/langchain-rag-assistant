@@ -12,6 +12,7 @@ State is threaded through each node as a TypedDict.
 """
 from __future__ import annotations
 
+import logging
 import re
 from functools import lru_cache
 from typing import Any, TypedDict
@@ -22,8 +23,12 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
+logger = logging.getLogger("rag")
+
 from app.config import get_settings
 from app.rag import guardrails
+from app.rag.rerank import rerank
+from app.rag.retrieval import retrieve as hybrid_retrieve
 from app.rag.vectorstore import get_retriever
 
 SYSTEM_PROMPT = (
@@ -39,6 +44,11 @@ SYSTEM_PROMPT = (
 
 class RAGState(TypedDict, total=False):
     question: str
+    # The question actually retrieved on. Equal to `question` on a first turn;
+    # on a follow-up it is the condensed, standalone rewrite (spec 003).
+    standalone_question: str
+    history: list[dict[str, str]]
+    tenants: list[str]
     documents: list[Document]
     answer: str
     sources: list[dict[str, Any]]
@@ -197,9 +207,52 @@ def _dedupe(documents: list[Document]) -> list[Document]:
     return unique
 
 
+CONDENSE_PROMPT = (
+    "Rewrite the follow-up question as a standalone question that can be "
+    "understood without the conversation. Resolve pronouns and references using "
+    "the history. Keep it short. Output only the rewritten question."
+)
+
+
+def condense_node(state: RAGState) -> RAGState:
+    """Resolve a follow-up into a standalone question (spec 003 AC-2/3/4/6).
+
+    Without this, "what about the second one?" is retrieved on those words
+    alone, which matches nothing. The first turn skips the call entirely.
+    """
+    question = state["question"]
+    history = state.get("history") or []
+    if not history:
+        return {"standalone_question": question}
+
+    turns = history[-(get_settings().history_turns) :]
+    transcript = "\n".join(f"{t.get('role')}: {t.get('content')}" for t in turns)
+    try:
+        response = _get_llm().invoke(
+            [
+                SystemMessage(content=CONDENSE_PROMPT),
+                HumanMessage(content=f"History:\n{transcript}\n\nFollow-up: {question}"),
+            ]
+        )
+        rewritten = (
+            response.content
+            if isinstance(response.content, str)
+            else str(response.content)
+        ).strip()
+    except Exception:  # noqa: BLE001 - AC-6: fall back to the original
+        logger.exception("Condense failed; retrieving on the original question")
+        return {"standalone_question": question}
+
+    return {"standalone_question": rewritten or question}
+
+
 def retrieve_node(state: RAGState) -> RAGState:
+    settings = get_settings()
     retriever = get_retriever()
-    docs = _dedupe(retriever.invoke(state["question"]))
+    query = state.get("standalone_question") or state["question"]
+    tenants = set(state.get("tenants") or [settings.public_tenant])
+
+    docs = _dedupe(hybrid_retrieve(retriever, query, tenants))
 
     # Passages the ingest-time classifier flagged never reach the prompt. This
     # is the indirect-injection path: instructions hidden in an uploaded PDF
@@ -210,8 +263,14 @@ def retrieve_node(state: RAGState) -> RAGState:
     if excluded:
         triggered.append(f"context:{excluded} suspicious passage(s) excluded")
 
+    # Rerank before truncation, so the passages the model sees are the best
+    # ones rather than the best-fused ones (spec 002 AC-1).
+    if settings.rerank:
+        kept = rerank(query, kept, _get_llm())
+        triggered.append("rerank:applied")
+
     return {
-        "documents": kept[: get_settings().retrieval_k],
+        "documents": kept[: settings.retrieval_k],
         "guardrails": triggered,
     }
 
@@ -230,6 +289,11 @@ def generate_node(state: RAGState) -> RAGState:
     documents = state["documents"]
     context = _format_context(documents)
     human = f"Context:\n{context}\n\nQuestion: {state['question']}"
+    history = state.get("history") or []
+    if history:
+        turns = history[-(get_settings().history_turns) :]
+        transcript = "\n".join(f"{t.get('role')}: {t.get('content')}" for t in turns)
+        human = f"Conversation so far:\n{transcript}\n\n{human}"
     critique = state.get("critique")
     if critique:
         human += (
@@ -342,6 +406,7 @@ def _after_retrieve(state: RAGState) -> str:
 def build_graph():
     graph = StateGraph(RAGState)
     graph.add_node("input_guardrail", input_guardrail_node)
+    graph.add_node("condense", condense_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("no_context", no_context_node)
     graph.add_node("generate", generate_node)
@@ -349,8 +414,9 @@ def build_graph():
 
     graph.add_edge(START, "input_guardrail")
     graph.add_conditional_edges(
-        "input_guardrail", _after_input, {"blocked": END, "retrieve": "retrieve"}
+        "input_guardrail", _after_input, {"blocked": END, "retrieve": "condense"}
     )
+    graph.add_edge("condense", "retrieve")
     graph.add_conditional_edges(
         "retrieve",
         _after_retrieve,
@@ -379,6 +445,7 @@ def build_multi_agent_graph():
     """Corrective multi-agent RAG: grader -> generator -> verifier (-> refine)."""
     graph = StateGraph(RAGState)
     graph.add_node("input_guardrail", input_guardrail_node)
+    graph.add_node("condense", condense_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("grade_documents", grade_documents_node)
     graph.add_node("no_context", no_context_node)
@@ -388,8 +455,9 @@ def build_multi_agent_graph():
 
     graph.add_edge(START, "input_guardrail")
     graph.add_conditional_edges(
-        "input_guardrail", _after_input, {"blocked": END, "retrieve": "retrieve"}
+        "input_guardrail", _after_input, {"blocked": END, "retrieve": "condense"}
     )
+    graph.add_edge("condense", "retrieve")
     graph.add_conditional_edges(
         "retrieve",
         _after_retrieve,
@@ -412,7 +480,11 @@ def build_multi_agent_graph():
     return graph.compile()
 
 
-def answer_question(question: str) -> dict[str, Any]:
+def answer_question(
+    question: str,
+    history: list[dict[str, str]] | None = None,
+    tenants: set[str] | None = None,
+) -> dict[str, Any]:
     """Run the configured RAG graph and return a serializable result."""
     settings = get_settings()
     trace_id = uuid4()
@@ -424,6 +496,8 @@ def answer_question(question: str) -> dict[str, Any]:
     final: RAGState = app.invoke(
         {
             "question": question,
+            "history": list(history or []),
+            "tenants": sorted(tenants or {settings.public_tenant}),
             "guardrails": [],
             "documents": [],
             "sources": [],
@@ -444,12 +518,18 @@ def answer_question(question: str) -> dict[str, Any]:
                 "llm_provider": settings.llm_provider.lower(),
                 "embedding_backend": settings.embedding_backend.lower(),
                 "retrieval_k": settings.retrieval_k,
+                "hybrid_retrieval": settings.hybrid_retrieval,
+                "rerank": settings.rerank,
+                "chunking": settings.chunking_strategy,
             },
         },
     )
+    standalone = final.get("standalone_question") or question
     return {
         "answer": final.get("answer", ""),
         "sources": final.get("sources", []),
+        # Surfaced so a follow-up shows what was actually retrieved on.
+        "standalone_question": standalone if standalone != question else None,
         "guardrails": final.get("guardrails", []),
         "blocked": final.get("blocked", False),
         "trace_id": (
