@@ -514,6 +514,20 @@ bundle.
    `https://langchain-rag-assistant-tw27.onrender.com`. Note that environment
    variables already set in the Render dashboard **override** `render.yaml`, so
    changing a model there means changing it in the dashboard too.
+
+   To switch the hosted backend from Groq to Gemini, nothing in the code
+   changes — set these three in the dashboard and redeploy:
+
+   | Variable | Value |
+   | --- | --- |
+   | `LLM_PROVIDER` | `gemini` |
+   | `GOOGLE_API_KEY` | your free key from [aistudio.google.com](https://aistudio.google.com) |
+   | `GEMINI_MODEL` | `gemini-3.6-flash` (optional; this is the default) |
+
+   `GET /api/health` then reports `llm_provider: gemini` and an `llm_status` of
+   `ok` once the startup probe has actually reached the model — so a bad key or
+   a retired model shows up immediately rather than on someone's first
+   question.
 2. **Frontend → point it at the backend:** add an Actions repository variable
    named `VITE_API_BASE` with the full Render URL (repo *Settings → Secrets and
    variables → Actions → Variables*).

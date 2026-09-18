@@ -1,6 +1,9 @@
 # Render Blueprint — one-click deploy of the RAG backend on the free tier.
 # In Render: New → Blueprint → connect this repo. Then set GROQ_API_KEY
 # (marked sync:false) in the dashboard — it stays server-side and hidden.
+#
+# NOTE: variables already set in the Render dashboard OVERRIDE the values here.
+# Changing a model in this file alone does nothing to a running service.
 services:
   - type: web
     name: rag-backend
@@ -16,6 +19,13 @@ services:
         value: openai/gpt-oss-120b
       - key: GROQ_API_KEY
         sync: false # <-- set this secret in the Render dashboard, not in code
+      # To run on Gemini instead: set LLM_PROVIDER=gemini and add a free key
+      # from https://aistudio.google.com. Declared here so a blueprint deploy
+      # knows to prompt for it; leave it empty to stay on Groq.
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash
       - key: PIPELINE
         value: simple
       # LangSmith traces every LangGraph request. Create the key at
