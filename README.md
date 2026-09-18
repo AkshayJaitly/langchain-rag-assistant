@@ -173,10 +173,33 @@ flowchart TB
     class GD,V agent
 ```
 
-The multi-agent pipeline adds relevance grading and answer verification, but it
-also adds model calls and latency. Keep the simple pipeline as the production
-default until both versions have been compared with a LangSmith evaluation
-dataset.
+### Measured: the multi-agent pipeline is worse here
+
+This used to read "keep the simple pipeline as the default until both versions
+have been compared." They have now been compared, on the golden dataset with
+distractors (`python -m eval.run --compare pipeline --answers`):
+
+| Pipeline | answer match | refusal accuracy | median latency |
+| --- | --- | --- | --- |
+| `simple` | **1.00** | 1.00 | 5.7 s |
+| `multi_agent` | **0.955** | 1.00 | 10.6 s |
+
+The corrective pipeline costs 1.85x the latency and **loses** an answer: it
+refuses "What share of revenue went on cloud infrastructure in Q3?", which is on
+page 2 of the metrics document. The likely cause is the grader dropping the
+relevant document — the shadow distractor reports a similar figure for the
+previous quarter, which is exactly the confusion those distractors were added to
+create.
+
+Refusal accuracy was already 1.00 on the simple path, so the verifier had no
+grounding headroom to win back and could only lose. It also makes three to four
+model calls per question, which is enough to hit Groq's free-tier rate limit
+where the simple path does not.
+
+`simple` stays the default — now on evidence rather than on caution. The caveat
+worth stating: this is 26 cases and a single failure, so it is a directional
+result, not a statistically strong one. It says the extra agents are not paying
+for themselves *on this corpus*, not that corrective RAG is a bad idea.
 
 
 ## Retrieval
