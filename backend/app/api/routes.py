@@ -70,6 +70,11 @@ def health() -> dict[str, str]:
         "tracing": "on" if langsmith_enabled(settings) else "off",
         # "ok" once the configured model has answered a probe at startup.
         "llm_status": _llm_status,
+        # Ingestion tuning, echoed so a running instance can be checked against
+        # the code that is supposed to be deployed.
+        "ingest_batch_size": str(settings.ingest_batch_size),
+        "embed_batch_size": str(settings.fastembed_batch_size),
+        "embed_threads": str(settings.fastembed_threads),
     }
 
 
