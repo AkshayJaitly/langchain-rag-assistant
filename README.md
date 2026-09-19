@@ -392,6 +392,32 @@ Recall@4 still saturates, so **CI gates on MRR**, which is the metric with room
 to regress. Answer quality (`--answers`) needs a judge and stays a manual run;
 it currently reports 1.00 answer match and 1.00 refusal accuracy.
 
+### Measured: reranking does not pay for itself here
+
+`python -m eval.run --compare rerank --answers`, on the golden dataset with
+distractors:
+
+| Reranking | answer match | refusal accuracy | median latency |
+| --- | --- | --- | --- |
+| off | 1.00 | 1.00 | **5.9 s** |
+| on | 1.00 | 1.00 | **24.5 s** |
+
+Four times the latency for no measurable gain, so `RERANK` stays off by default.
+
+**But the claim has to be narrower than it looks**, and the reason is a gap in
+the harness rather than in the reranker. `rerank()` runs inside the graph's
+retrieve node, while the retrieval metrics call `app.rag.retrieval.retrieve()`
+directly — so **page recall and MRR never see reranking at all**. What is
+measured above is the answer level, where both configurations were already
+saturated at 1.00 and had no room to differ.
+
+So the honest statement is: reranking shows no answer-quality benefit on a corpus
+where answer quality is already perfect, and costs 4.2x latency. Whether it
+improves *ranking order* is unmeasured, because the metric that would show it
+runs upstream of the reranker. Fixing that means scoring retrieval through the
+graph node rather than around it — worth doing before reranking is judged
+properly.
+
 ### What the harness has caught
 
 Both of these were live bugs, found by running the evaluation rather than by
